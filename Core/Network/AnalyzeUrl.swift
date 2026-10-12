@@ -489,13 +489,13 @@ class AnalyzeUrl {
         bridge.inject(into: jsContext)
 
         // 设置特定变量
-        jsContext.setValue(baseUrl, forKey: "baseUrl")
-        jsContext.setValue(result, forKey: "result")
-        jsContext.setValue(result, forKey: "url")
-        if let page = page { jsContext.setValue(page, forKey: "page") }
-        if let key = key { jsContext.setValue(key, forKey: "key") }
-        if let speakText = speakText { jsContext.setValue(speakText, forKey: "speakText") }
-        if let speakSpeed = speakSpeed { jsContext.setValue(speakSpeed, forKey: "speakSpeed") }
+        jsContext.setObject(baseUrl, forKeyedSubscript: "baseUrl" as NSString)
+        jsContext.setObject(result, forKeyedSubscript: "result" as NSString)
+        jsContext.setObject(result, forKeyedSubscript: "url" as NSString)
+        if let page = page { jsContext.setObject(page, forKeyedSubscript: "page" as NSString) }
+        if let key = key { jsContext.setObject(key, forKeyedSubscript: "key" as NSString) }
+        if let speakText = speakText { jsContext.setObject(speakText, forKeyedSubscript: "speakText" as NSString) }
+        if let speakSpeed = speakSpeed { jsContext.setObject(speakSpeed, forKeyedSubscript: "speakSpeed" as NSString) }
 
         // 执行
         let evalResult = jsContext.evaluateScript(trimmed)

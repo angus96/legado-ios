@@ -205,9 +205,12 @@ class JSBridge: JsEncodeUtils {
             guard let self = self, let jsContext = jsContext else { return JSValue(nullIn: jsContext) }
             let crypto = self.createSymmetricCrypto(transformation: transformation, key: key, iv: iv)
             let obj = JSValue(newObjectIn: jsContext)
-            obj?.setObject({ (d: String) -> String in crypto.encryptBase64(d) ?? "" }, forKeyedSubscript: "encryptBase64" as NSString)
-            obj?.setObject({ (d: String) -> String in crypto.encryptHex(d) ?? "" }, forKeyedSubscript: "encryptHex" as NSString)
-            obj?.setObject({ (d: String) -> String in crypto.decryptStr(d) ?? "" }, forKeyedSubscript: "decryptStr" as NSString)
+            let encryptBase64: @convention(block) (String) -> String = { crypto.encryptBase64($0) ?? "" }
+            let encryptHex: @convention(block) (String) -> String = { crypto.encryptHex($0) ?? "" }
+            let decryptStr: @convention(block) (String) -> String = { crypto.decryptStr($0) ?? "" }
+            obj?.setObject(encryptBase64, forKeyedSubscript: "encryptBase64" as NSString)
+            obj?.setObject(encryptHex, forKeyedSubscript: "encryptHex" as NSString)
+            obj?.setObject(decryptStr, forKeyedSubscript: "decryptStr" as NSString)
             return obj ?? JSValue(nullIn: jsContext)
         }
         javaObject?.setObject(createSymCryptoBlock, forKeyedSubscript: "createSymmetricCrypto" as NSString)
@@ -265,7 +268,7 @@ class JSBridge: JsEncodeUtils {
         javaObject?.setObject(androidIdBlock, forKeyedSubscript: "androidId" as NSString)
         #endif
 
-        jsContext.setValue(javaObject, forKey: "java")
+        jsContext.setObject(javaObject, forKeyedSubscript: "java" as NSString)
     }
 
     // MARK: - source 对象注入
@@ -273,15 +276,15 @@ class JSBridge: JsEncodeUtils {
     private func injectSourceObject(into jsContext: JSContext) {
         let sourceObject = JSValue(newObjectIn: jsContext)
 
-        sourceObject?.setObject({ [weak self] in self?.context?.source?.bookSourceUrl ?? "" }, forKeyedSubscript: "bookSourceUrl" as NSString)
-        sourceObject?.setObject({ [weak self] in self?.context?.source?.bookSourceName ?? "" }, forKeyedSubscript: "bookSourceName" as NSString)
-        sourceObject?.setObject({ [weak self] in self?.context?.source?.loginUrl ?? "" }, forKeyedSubscript: "loginUrl" as NSString)
-        sourceObject?.setObject({ [weak self] in self?.context?.source?.header ?? "" }, forKeyedSubscript: "header" as NSString)
-        sourceObject?.setObject({ [weak self] in self?.context?.source?.variable ?? "" }, forKeyedSubscript: "variable" as NSString)
-        sourceObject?.setObject({ [weak self] in self?.context?.source?.enabledCookieJar ?? false }, forKeyedSubscript: "enabledCookieJar" as NSString)
-        sourceObject?.setObject({ [weak self] in self?.context?.source?.concurrentRate ?? "" }, forKeyedSubscript: "concurrentRate" as NSString)
+        sourceObject?.setObject(context?.source?.bookSourceUrl ?? "", forKeyedSubscript: "bookSourceUrl" as NSString)
+        sourceObject?.setObject(context?.source?.bookSourceName ?? "", forKeyedSubscript: "bookSourceName" as NSString)
+        sourceObject?.setObject(context?.source?.loginUrl ?? "", forKeyedSubscript: "loginUrl" as NSString)
+        sourceObject?.setObject(context?.source?.header ?? "", forKeyedSubscript: "header" as NSString)
+        sourceObject?.setObject(context?.source?.variable ?? "", forKeyedSubscript: "variable" as NSString)
+        sourceObject?.setObject(context?.source?.enabledCookieJar ?? false, forKeyedSubscript: "enabledCookieJar" as NSString)
+        sourceObject?.setObject(context?.source?.concurrentRate ?? "", forKeyedSubscript: "concurrentRate" as NSString)
 
-        jsContext.setValue(sourceObject, forKey: "source")
+        jsContext.setObject(sourceObject, forKeyedSubscript: "source" as NSString)
     }
 
     // MARK: - cookie 对象注入
@@ -323,7 +326,7 @@ class JSBridge: JsEncodeUtils {
         cookieObject?.setObject(setCookieBlock, forKeyedSubscript: "set" as NSString)
         cookieObject?.setObject(removeCookieBlock, forKeyedSubscript: "remove" as NSString)
 
-        jsContext.setValue(cookieObject, forKey: "cookie")
+        jsContext.setObject(cookieObject, forKeyedSubscript: "cookie" as NSString)
     }
 
     // MARK: - cache 对象注入
@@ -331,11 +334,13 @@ class JSBridge: JsEncodeUtils {
     private func injectCacheObject(into jsContext: JSContext) {
         let cacheObject = JSValue(newObjectIn: jsContext)
 
-        cacheObject?.setObject({ (key: String) -> String in CacheStore.get(key) ?? "" }, forKeyedSubscript: "get" as NSString)
-        cacheObject?.setObject({ (key: String, value: String) -> Void in CacheStore.put(key, value: value) }, forKeyedSubscript: "put" as NSString)
-        cacheObject?.setObject({ (key: String) -> String in CacheStore.get(key) ?? "" }, forKeyedSubscript: "getFromMemory" as NSString)
+        let getCache: @convention(block) (String) -> String = { CacheStore.get($0) ?? "" }
+        let putCache: @convention(block) (String, String) -> Void = { CacheStore.put($0, value: $1) }
+        cacheObject?.setObject(getCache, forKeyedSubscript: "get" as NSString)
+        cacheObject?.setObject(putCache, forKeyedSubscript: "put" as NSString)
+        cacheObject?.setObject(getCache, forKeyedSubscript: "getFromMemory" as NSString)
 
-        jsContext.setValue(cacheObject, forKey: "cache")
+        jsContext.setObject(cacheObject, forKeyedSubscript: "cache" as NSString)
     }
 
     // MARK: - 辅助方法

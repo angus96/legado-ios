@@ -99,10 +99,10 @@ final class TocParser {
 
     private func applyFormatJS(_ js: String, chapter: WebChapter, displayIndex: Int) -> String? {
         let context = JSContext()
-        context?.setValue(displayIndex, forKey: "index")
-        context?.setValue(chapter.title, forKey: "title")
-        context?.setValue(0, forKey: "gInt")
-        context?.setValue([
+        context?.setObject(displayIndex, forKeyedSubscript: "index" as NSString)
+        context?.setObject(chapter.title, forKeyedSubscript: "title" as NSString)
+        context?.setObject(0, forKeyedSubscript: "gInt" as NSString)
+        context?.setObject([
             "title": chapter.title,
             "url": chapter.url,
             "index": chapter.index,
@@ -110,7 +110,7 @@ final class TocParser {
             "isPay": chapter.isPay,
             "isVolume": chapter.isVolume,
             "updateTime": chapter.updateTime as Any
-        ], forKey: "chapter")
+        ], forKeyedSubscript: "chapter" as NSString)
 
         if let value = context?.evaluateScript(js)?.toString(), !value.isEmpty {
             return value

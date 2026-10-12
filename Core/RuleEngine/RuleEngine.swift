@@ -56,27 +56,29 @@ class ExecutionContext {
     var source: BookSource?
     var variables: [String: String] = [:]
     var lastResult: RuleResult = .none
+    private var jsBridge: JSBridge?
     
     lazy var jsContext: JSContext = {
         let context = JSContext()!
 
         let bridge = JSBridge()
         bridge.context = self
+        jsBridge = bridge
         bridge.inject(into: context)
         
         // 注入getVar/setVar
-        context.setValue({ [weak self] (key: String) -> String in
+        let getVarBlock: @convention(block) (String) -> String = { [weak self] key in
             self?.variables[key] ?? ""
-        }, forKey: "getVar")
+        }
+        context.setObject(getVarBlock, forKeyedSubscript: "getVar" as NSString)
         
-        context.setValue({ [weak self] (key: String, value: String) in
+        let setVarBlock: @convention(block) (String, String) -> Void = { [weak self] key, value in
             self?.variables[key] = value
-        }, forKey: "setVar")
+        }
+        context.setObject(setVarBlock, forKeyedSubscript: "setVar" as NSString)
         
         // 注入 result
-        context.setValue({ [weak self] () -> String? in
-            self?.lastResult.string
-        }, forKey: "result")
+        context.setObject(lastResult.string, forKeyedSubscript: "result" as NSString)
         
         return context
     }()
@@ -100,8 +102,8 @@ private final class SourceRuleContextAdapter: RuleExecutionContext {
     }
 
     func evalJS(_ jsCode: String, result: Any?) -> String? {
-        executionContext.jsContext.setValue(result, forKey: "result")
-        executionContext.jsContext.setValue(executionContext.baseURL?.absoluteString, forKey: "baseUrl")
+        executionContext.jsContext.setObject(result, forKeyedSubscript: "result" as NSString)
+        executionContext.jsContext.setObject(executionContext.baseURL?.absoluteString, forKeyedSubscript: "baseUrl" as NSString)
         return executionContext.jsContext.evaluateScript(jsCode)?.toString()
     }
 
@@ -1609,8 +1611,8 @@ class JavaScriptParser: RuleExecutor {
     func execute(_ rule: String, context: ExecutionContext) throws -> RuleResult {
         let jsCode = extractJS(rule)
         
-        context.jsContext.setValue(context.lastResult.string, forKey: "result")
-        context.jsContext.setValue(context.baseURL?.absoluteString, forKey: "baseUrl")
+        context.jsContext.setObject(context.lastResult.string, forKeyedSubscript: "result" as NSString)
+        context.jsContext.setObject(context.baseURL?.absoluteString, forKeyedSubscript: "baseUrl" as NSString)
         
         let jsValue = context.jsContext.evaluateScript(jsCode)
         

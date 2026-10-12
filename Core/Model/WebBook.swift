@@ -533,9 +533,9 @@ class WebBook {
         executionContext.variables["url"] = response.url
 
         let jsContext = executionContext.jsContext
-        jsContext.setValue(["body": response.body, "url": response.url], forKey: "result")
-        jsContext.setValue(response.body, forKey: "body")
-        jsContext.setValue(response.url, forKey: "url")
+        jsContext.setObject(["body": response.body, "url": response.url], forKeyedSubscript: "result" as NSString)
+        jsContext.setObject(response.body, forKeyedSubscript: "body" as NSString)
+        jsContext.setObject(response.url, forKeyedSubscript: "url" as NSString)
 
         guard let value = jsContext.evaluateScript(checkJs) else {
             return response
@@ -577,8 +577,8 @@ class WebBook {
         }
 
         let context = JSContext()
-        context?.setValue(body, forKey: "body")
-        context?.setValue(baseUrl, forKey: "baseUrl")
+        context?.setObject(body, forKeyedSubscript: "body" as NSString)
+        context?.setObject(baseUrl, forKeyedSubscript: "baseUrl" as NSString)
         if let result = context?.evaluateScript(js)?.toString(), !result.isEmpty {
             return result
         }

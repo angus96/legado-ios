@@ -147,8 +147,8 @@ class ImageCacheManager: ObservableObject {
         let executionContext = ExecutionContext()
         executionContext.source = source
         executionContext.baseURL = URL(string: source.bookSourceUrl)
-        executionContext.jsContext.setValue(url, forKey: "src")
-        executionContext.jsContext.setValue(url, forKey: "result")
+        executionContext.jsContext.setObject(url, forKeyedSubscript: "src" as NSString)
+        executionContext.jsContext.setObject(url, forKeyedSubscript: "result" as NSString)
 
         let directValue = executionContext.jsContext.evaluateScript(decodeJS)?.toString()
         let resultValue = executionContext.jsContext.objectForKeyedSubscript("result")?.toString()

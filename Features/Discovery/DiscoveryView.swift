@@ -394,7 +394,7 @@ class DiscoveryViewModel: ObservableObject {
            let data = variable.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             for (key, value) in json {
-                context.jsContext.setValue(value, forKey: key)
+                context.jsContext.setObject(value, forKeyedSubscript: key as NSString)
             }
         }
 
