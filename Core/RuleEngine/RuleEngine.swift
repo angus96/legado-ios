@@ -57,6 +57,14 @@ class ExecutionContext {
     var variables: [String: String] = [:]
     var lastResult: RuleResult = .none
     private var jsBridge: JSBridge?
+
+    var ruleInput: Any? {
+        switch lastResult {
+        case .string(let value): return value
+        case .list(let values): return values
+        case .none: return jsonValue ?? jsonDict ?? document ?? jsonString
+        }
+    }
     
     lazy var jsContext: JSContext = {
         let context = JSContext()!
@@ -102,9 +110,13 @@ private final class SourceRuleContextAdapter: RuleExecutionContext {
     }
 
     func evalJS(_ jsCode: String, result: Any?) -> String? {
-        executionContext.jsContext.setObject(result, forKeyedSubscript: "result" as NSString)
-        executionContext.jsContext.setObject(executionContext.baseURL?.absoluteString, forKeyedSubscript: "baseUrl" as NSString)
-        return executionContext.jsContext.evaluateScript(jsCode)?.toString()
+        let jsContext = executionContext.jsContext
+        jsContext.exception = nil
+        jsContext.setObject(JavaScriptRuleInput.value(result), forKeyedSubscript: "result" as NSString)
+        jsContext.setObject(executionContext.baseURL?.absoluteString, forKeyedSubscript: "baseUrl" as NSString)
+        guard let value = jsContext.evaluateScript(jsCode), jsContext.exception == nil,
+              !value.isUndefined, !value.isNull else { return nil }
+        return value.toString()
     }
 
     func resolveRule(_ rule: SourceRule) -> String? {
@@ -258,14 +270,7 @@ class RuleEngine {
     }
 
     private func sourceRuleInput(from context: ExecutionContext) -> Any? {
-        switch context.lastResult {
-        case .string(let value):
-            return value
-        case .list(let values):
-            return values
-        case .none:
-            return context.jsonValue ?? context.jsonDict ?? context.document ?? context.jsonString
-        }
+        context.ruleInput
     }
 
     private func sourceRuleMode(for kind: RuleKind) -> RuleMode {
@@ -1601,6 +1606,24 @@ class RegexParser: RuleExecutor {
 }
 
 // MARK: - JavaScript 解析器
+
+private enum JavaScriptRuleInput {
+    /// JavaScriptCore cannot wrap SwiftSoup's pure Swift classes as Objective-C objects.
+    /// Convert HTML to text and recursively restrict JSON containers to bridged values.
+    static func value(_ input: Any?) -> Any {
+        guard let input else { return NSNull() }
+        if let element = input as? SwiftSoup.Element {
+            return (try? element.outerHtml()) ?? ""
+        }
+        if let string = input as? String { return string }
+        if let number = input as? NSNumber { return number }
+        if input is NSNull { return NSNull() }
+        if let array = input as? [Any] { return array.map { value($0) } }
+        if let dictionary = input as? [String: Any] { return dictionary.mapValues { value($0) } }
+        return NSNull()
+    }
+}
+
 class JavaScriptParser: RuleExecutor {
     var kind: RuleKind { .js }
     
@@ -1611,12 +1634,17 @@ class JavaScriptParser: RuleExecutor {
     func execute(_ rule: String, context: ExecutionContext) throws -> RuleResult {
         let jsCode = extractJS(rule)
         
-        context.jsContext.setObject(context.lastResult.string, forKeyedSubscript: "result" as NSString)
-        context.jsContext.setObject(context.baseURL?.absoluteString, forKeyedSubscript: "baseUrl" as NSString)
-        
-        let jsValue = context.jsContext.evaluateScript(jsCode)
-        
-        if let string = jsValue?.toString() {
+        let jsContext = context.jsContext
+        jsContext.exception = nil
+        jsContext.setObject(JavaScriptRuleInput.value(context.ruleInput), forKeyedSubscript: "result" as NSString)
+        jsContext.setObject(context.baseURL?.absoluteString, forKeyedSubscript: "baseUrl" as NSString)
+
+        let jsValue = jsContext.evaluateScript(jsCode)
+        if let exception = jsContext.exception {
+            throw RuleError.executionFailed(exception.toString() ?? "JavaScript 执行失败")
+        }
+
+        if let jsValue, !jsValue.isNull, !jsValue.isUndefined, let string = jsValue.toString() {
             return .string(string)
         }
         

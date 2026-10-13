@@ -11,6 +11,7 @@ class SearchViewModel: ObservableObject {
     
     private var ruleEngine: RuleEngine = RuleEngine()
     private var searchTask: Task<Void, Never>?
+    private var searchID = UUID()
 
     init() {
         loadDefaultSources()
@@ -26,6 +27,7 @@ class SearchViewModel: ObservableObject {
     }
     
     func cancelSearch() {
+        searchID = UUID()
         searchTask?.cancel()
         searchTask = nil
         isSearching = false
@@ -56,50 +58,56 @@ class SearchViewModel: ObservableObject {
     
     func search(keyword: String, sources: [BookSource]) async {
         guard !keyword.isEmpty else {
+            cancelSearch()
             searchResults = []
             isSearching = false
             return
         }
 
         searchTask?.cancel()
+        let requestID = UUID()
+        searchID = requestID
         searchTask = Task { [keyword] in
+            guard self.searchID == requestID, !Task.isCancelled else { return }
             isSearching = true
             searchResults.removeAll()
             errorMessage = nil
 
             defer {
-                isSearching = false
-                searchTask = nil
+                if self.searchID == requestID {
+                    isSearching = false
+                    searchTask = nil
+                }
             }
 
             let enabledSources = sources.filter { $0.enabled && $0.searchUrl != nil }
             var partialBuckets: [(Int, [SearchResult])] = []
             var sourceErrors: [(Int, String)] = []
 
-            await withTaskGroup(of: (Int, [SearchResult], String?).self) { group in
-                for (index, source) in enabledSources.enumerated() {
-                    group.addTask { [keyword] in
-                        do {
-                            let results = try await self.searchInSource(keyword: keyword, source: source)
-                            return (index, results, nil)
-                        } catch is CancellationError {
-                            return (index, [], nil)
-                        } catch {
-                            let message = "\(source.bookSourceName)：\(error.localizedDescription)"
-                            return (index, [], message)
-                        }
-                    }
+            await ConcurrentSourceSearch.run(Array(enabledSources.enumerated())) { item -> (Int, [SearchResult], String?) in
+                let (index, source) = item
+                do {
+                    let results = try await self.searchInSource(keyword: keyword, source: source)
+                    return (index, results, nil)
+                } catch is CancellationError {
+                    return (index, [], nil)
+                } catch {
+                    let message = "\(source.bookSourceName)：\(error.localizedDescription)"
+                    return (index, [], message)
                 }
-
-                for await (index, results, error) in group {
-                    partialBuckets.append((index, results))
-                    if let error {
-                        sourceErrors.append((index, error))
-                    }
+            } onResult: { index, results, error in
+                guard !Task.isCancelled, self.searchID == requestID else { return }
+                partialBuckets.append((index, results))
+                if !results.isEmpty {
+                    let merged = partialBuckets.sorted { $0.0 < $1.0 }.flatMap { $0.1 }
+                    self.searchResults = self.aggregateResults(merged)
+                }
+                if let error {
+                    sourceErrors.append((index, error))
                 }
             }
 
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, self.searchID == requestID else { return }
 
             let merged = partialBuckets
                 .sorted { $0.0 < $1.0 }

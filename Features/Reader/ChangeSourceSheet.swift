@@ -33,18 +33,29 @@ class ChangeSourceViewModel: ObservableObject {
     @Published var searchProgress: Double = 0
     @Published var errorMessage: String?
     
-    private var searchTasks: [Task<Void, Never>] = []
+    private var searchTask: Task<Void, Never>?
+    private var searchID = UUID()
     private let ruleEngine = RuleEngine()
     
     /// 搜索可用书源
     func searchSources(for book: Book) async {
+        cancelSearch()
+        let requestID = UUID()
+        searchID = requestID
+        let task = Task {
+            guard self.searchID == requestID, !Task.isCancelled else { return }
+            await performSearch(for: book, requestID: requestID)
+        }
+        searchTask = task
+        await task.value
+        if searchID == requestID { searchTask = nil }
+    }
+
+    private func performSearch(for book: Book, requestID: UUID) async {
         isSearching = true
         searchProgress = 0
         results = []
         errorMessage = nil
-        
-        // 取消之前的搜索
-        cancelSearch()
         
         let context = CoreDataStack.shared.viewContext
         
@@ -62,61 +73,40 @@ class ChangeSourceViewModel: ObservableObject {
         let totalSources = sources.count
         var completedCount = 0
         
-        // 并发搜索，限制并发数
-        let semaphore = DispatchSemaphore(value: 5) // 最多 5 个并发
-        
-        for source in sources {
-            let isCurrentSource = source.bookSourceUrl == book.origin
-            
-            let task = Task { [weak self] in
-                guard !Task.isCancelled else { return }
-                
-                do {
-                    // 在书源中搜索当前书名
-                    let searchResults = try await WebBook.searchBook(
-                        source: source,
-                        key: book.name
-                    )
-                    
-                    // 找到匹配的书籍（书名+作者匹配）
-                    let matched = searchResults.first { searchBook in
-                        searchBook.name == book.name &&
-                        (book.author.isEmpty || searchBook.author == book.author)
-                    }
-                    
-                    if let matchedBook = matched {
-                        let result = ChangeSourceResult(
-                            source: source,
-                            latestChapter: matchedBook.lastChapter ?? "未知",
-                            chapterCount: 0,
-                            bookUrl: matchedBook.bookUrl,
-                            tocUrl: "",
-                            isCurrentSource: isCurrentSource
-                        )
-                        
-                        await MainActor.run {
-                            self?.results.append(result)
-                            self?.sortResults()
-                        }
-                    }
-                } catch {
-                    // 搜索失败时静默忽略（书源可能不可用）
-                    print("换源搜索失败[\(source.bookSourceName)]: \(error.localizedDescription)")
+        // 搜索与换源共用实际的并发限制。
+        await ConcurrentSourceSearch.run(sources) { source -> ChangeSourceResult? in
+            do {
+                let searchResults = try await WebBook.searchBook(source: source, key: book.name)
+                let matched = searchResults.first { searchBook in
+                    searchBook.name == book.name &&
+                    (book.author.isEmpty || searchBook.author == book.author)
                 }
-                
-                await MainActor.run {
-                    completedCount += 1
-                    self?.searchProgress = Double(completedCount) / Double(totalSources)
-                }
+                guard let matched else { return nil }
+                return ChangeSourceResult(
+                    source: source,
+                    latestChapter: matched.lastChapter ?? "未知",
+                    chapterCount: 0,
+                    bookUrl: matched.bookUrl,
+                    tocUrl: "",
+                    isCurrentSource: source.bookSourceUrl == book.origin
+                )
+            } catch is CancellationError {
+                return nil
+            } catch {
+                print("换源搜索失败[\(source.bookSourceName)]: \(error.localizedDescription)")
+                return nil
             }
-            
-            searchTasks.append(task)
+        } onResult: { result in
+            guard !Task.isCancelled, self.searchID == requestID else { return }
+            if let result {
+                self.results.append(result)
+                self.sortResults()
+            }
+            completedCount += 1
+            self.searchProgress = Double(completedCount) / Double(totalSources)
         }
-        
-        // 等待所有搜索完成
-        for task in searchTasks {
-            await task.value
-        }
+
+        guard !Task.isCancelled, searchID == requestID else { return }
         
         isSearching = false
         
@@ -187,10 +177,10 @@ class ChangeSourceViewModel: ObservableObject {
     
     /// 取消搜索
     func cancelSearch() {
-        for task in searchTasks {
-            task.cancel()
-        }
-        searchTasks.removeAll()
+        searchID = UUID()
+        searchTask?.cancel()
+        searchTask = nil
+        isSearching = false
     }
     
     /// 排序结果（当前源置顶，其余按章节数降序）

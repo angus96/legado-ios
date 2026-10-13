@@ -25,6 +25,9 @@ jobs:
 
     - name: Verify JavaScript Bridge
       run: python3 scripts/verify_javascript_bridge.py
+
+    - name: Verify HTML and JSON Rule Engine
+      run: python3 scripts/verify_rule_engine.py
     
     - name: Install xcodeproj gem
       run: gem install xcodeproj

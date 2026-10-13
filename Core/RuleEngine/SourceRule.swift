@@ -126,8 +126,7 @@ class SourceRule {
     
     /// 解析 @get, {{ }} 和正则
     private func parseEvalAndRegex(_ ruleStr: String) {
-        var start = 0
-        var result = ruleStr
+        var start = ruleStr.startIndex
         
         // 匹配 @get:{...} 或 {{...}}
         let evalPattern = #"@get:\{[^}]+?\}|\{\{[\w\W]*?\}\}"#
@@ -149,8 +148,9 @@ class SourceRule {
         }
         
         for (match, matchedStr) in matches {
-            if match.range.location > start {
-                let beforeMatch = ruleStr[ruleStr.index(ruleStr.startIndex, offsetBy: start)..<ruleStr.index(ruleStr.startIndex, offsetBy: match.range.location)]
+            guard let matchRange = Range(match.range, in: ruleStr) else { continue }
+            if matchRange.lowerBound > start {
+                let beforeMatch = ruleStr[start..<matchRange.lowerBound]
                 splitRegex(String(beforeMatch))
             }
             
@@ -166,11 +166,11 @@ class SourceRule {
                 splitRegex(matchedStr)
             }
             
-            start = match.range.location + match.range.length
+            start = matchRange.upperBound
         }
         
-        if start < ruleStr.count {
-            let remaining = String(ruleStr[ruleStr.index(ruleStr.startIndex, offsetBy: start)...])
+        if start < ruleStr.endIndex {
+            let remaining = String(ruleStr[start...])
             splitRegex(remaining)
         }
     }
@@ -188,7 +188,7 @@ class SourceRule {
             return
         }
         
-        var start = 0
+        var start = firstPart.startIndex
         let range = NSRange(firstPart.startIndex..., in: firstPart)
         var matches: [NSTextCheckingResult] = []
         
@@ -201,8 +201,9 @@ class SourceRule {
             ruleParam.append(firstPart)
         } else {
             for match in matches {
-                if match.range.location > start {
-                    let before = firstPart[firstPart.index(firstPart.startIndex, offsetBy: start)..<firstPart.index(firstPart.startIndex, offsetBy: match.range.location)]
+                guard let matchRange = Range(match.range, in: firstPart) else { continue }
+                if matchRange.lowerBound > start {
+                    let before = firstPart[start..<matchRange.lowerBound]
                     ruleType.append(defaultRuleType)
                     ruleParam.append(String(before))
                 }
@@ -215,11 +216,11 @@ class SourceRule {
                     }
                 }
                 
-                start = match.range.location + match.range.length
+                start = matchRange.upperBound
             }
             
-            if start < firstPart.count {
-                let remaining = String(firstPart[firstPart.index(firstPart.startIndex, offsetBy: start)...])
+            if start < firstPart.endIndex {
+                let remaining = String(firstPart[start...])
                 ruleType.append(defaultRuleType)
                 ruleParam.append(remaining)
             }
@@ -352,19 +353,19 @@ class SourceRuleParser {
     private func splitSourceRule(_ ruleStr: String, isJSON: Bool) -> [SourceRule] {
         var rules: [SourceRule] = []
         var mode: RuleMode = .default
-        var start = 0
+        var start = ruleStr.startIndex
         
         // 检查是否以 : 开头（AllInOne 模式）
         if ruleStr.hasPrefix(":") {
             mode = .regex
-            start = 1
+            start = ruleStr.index(after: start)
         }
         
         // 匹配 <js>...</js> 或 {{js}}
         let jsPattern = #"<js>[\w\W]*?</js>|\{\{[\w\W]*?\}\}"#
         
         guard let regex = try? NSRegularExpression(pattern: jsPattern) else {
-            let remaining = String(ruleStr[ruleStr.index(ruleStr.startIndex, offsetBy: start)...])
+            let remaining = String(ruleStr[start...])
             if !remaining.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 rules.append(SourceRule(ruleStr: remaining, mode: mode, isJSON: isJSON))
             }
@@ -378,27 +379,26 @@ class SourceRuleParser {
             if let match = match { matches.append(match) }
         }
         
-        var currentMode = mode
+        let currentMode = mode
         
         for match in matches {
-            if match.range.location > start {
-                let before = ruleStr[ruleStr.index(ruleStr.startIndex, offsetBy: start)..<ruleStr.index(ruleStr.startIndex, offsetBy: match.range.location)]
+            guard let matchRange = Range(match.range, in: ruleStr) else { continue }
+            if matchRange.lowerBound > start {
+                let before = ruleStr[start..<matchRange.lowerBound]
                 let trimmed = before.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
                     rules.append(SourceRule(ruleStr: trimmed, mode: currentMode, isJSON: isJSON))
                 }
             }
             
-            if let matchRange = Range(match.range, in: ruleStr) {
-                let jsCode = String(ruleStr[matchRange])
-                rules.append(SourceRule(ruleStr: jsCode, mode: .js, isJSON: isJSON))
-            }
+            let jsCode = String(ruleStr[matchRange])
+            rules.append(SourceRule(ruleStr: jsCode, mode: .js, isJSON: isJSON))
             
-            start = match.range.location + match.range.length
+            start = matchRange.upperBound
         }
         
-        if start < ruleStr.count {
-            let remaining = String(ruleStr[ruleStr.index(ruleStr.startIndex, offsetBy: start)...])
+        if start < ruleStr.endIndex {
+            let remaining = String(ruleStr[start...])
             let trimmed = remaining.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
                 rules.append(SourceRule(ruleStr: trimmed, mode: currentMode, isJSON: isJSON))
