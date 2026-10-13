@@ -2,6 +2,26 @@ import XCTest
 
 final class LegadoUITests: XCTestCase {
     @MainActor
+    func testDeletingBookFromTheShelfKeepsTheAppRunning() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["LEGADO_UI_TESTS"] = "1"
+        app.launchEnvironment["LEGADO_FIXTURE_URL"] = "http://127.0.0.1:8766"
+        app.launchArguments = ["-com.apple.CoreData.ConcurrencyDebug", "1"]
+        app.launch()
+        let book = app.staticTexts["测试书籍"].firstMatch
+        XCTAssertTrue(book.waitForExistence(timeout: 15))
+        book.press(forDuration: 1)
+        let remove = app.buttons["删除"].firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout: 5))
+        remove.tap()
+        XCTAssertTrue(app.staticTexts["书架空空如也"].waitForExistence(timeout: 10))
+        XCTAssertFalse(book.exists)
+        XCTAssertEqual(app.state, .runningForeground)
+        capture(app, name: "删除书籍后的空书架")
+    }
+
+    @MainActor
     func testSearchAndChangeSourcePagesRemainRunning() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
