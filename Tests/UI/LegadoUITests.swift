@@ -24,6 +24,11 @@ final class LegadoUITests: XCTestCase {
         loaded.lifetime = .keepAlways
         add(loaded)
         result.tap()
+        let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: result)
+        wait(for: [dismissed], timeout: 15)
+        let updatedSource = app.buttons["reader.changeSource"]
+        let updated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "测试新书源"), object: updatedSource)
+        wait(for: [updated], timeout: 15)
         XCTAssertTrue(canvas.waitForExistence(timeout: 15))
         XCTAssertFalse(app.alerts["换源失败"].exists)
         XCTAssertEqual(app.state, .runningForeground)
@@ -35,7 +40,7 @@ final class LegadoUITests: XCTestCase {
         let keyword = app.textFields["search.keyword"]
         XCTAssertTrue(keyword.waitForExistence(timeout: 5))
         keyword.tap()
-        keyword.typeText("测试\n")
+        keyword.typeText("fixture\n")
         XCTAssertTrue(app.staticTexts["测试书籍"].firstMatch.waitForExistence(timeout: 15))
         XCTAssertEqual(app.state, .runningForeground)
         let searched = XCTAttachment(screenshot: app.screenshot())

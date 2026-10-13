@@ -6,7 +6,7 @@ final class LegadoStabilityTests: XCTestCase {
     func testSerializedNumbersAndMissingInnerRules() throws {
         let engine = RuleEngine()
         let body = "{\"items\":[{\"idx\":0,\"titles\":[\"测试书籍\"]},{\"titles\":[\"缺字段\"]}]}"
-        let items = try engine.getElements(ruleStr: "$.items", body: body)
+        let items = try engine.getElements(ruleStr: "$.items", body: body, baseUrl: "https://example.invalid")
         XCTAssertEqual(engine.getString(ruleStr: "$.titles[{$.idx}]", elementContext: items[0]), "测试书籍")
         XCTAssertEqual(engine.getString(ruleStr: "$.titles[{$.idx}]", elementContext: items[1]), "")
     }
