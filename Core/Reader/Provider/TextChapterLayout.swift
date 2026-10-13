@@ -332,7 +332,8 @@ class TextChapterLayout {
         let titleTopSpacing = provider.titleTopSpacing
         
         let text = !isTitle && isFirstLine
-            ? String(repeating: ChapterProvider.indentChar, count: ReadBookConfig.paragraphIndent.length) + text
+            ? String(repeating: ChapterProvider.indentChar, count: ReadBookConfig.paragraphIndent.length)
+                + String(text.drop(while: { $0.isWhitespace }))
             : text
         // 测量文本宽度
         let widthsArray = measureTextWidths(text, font: font)

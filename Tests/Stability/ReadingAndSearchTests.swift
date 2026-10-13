@@ -39,7 +39,7 @@ final class ReadingAndSearchTests: XCTestCase {
         let provider = ChapterProvider.shared
         provider.updateViewSize(width: 390, height: 720)
         provider.updateStyle(titleFont: .systemFont(ofSize: 22), contentFont: .systemFont(ofSize: 20))
-        let paragraphs = ["短句。", "ASCII abcXYZ123，组合字符 e\u{301}，家庭👨‍👩‍👧‍👦。"] +
+        let paragraphs = ["　　短句。", "ASCII abcXYZ123，组合字符 e\u{301}，家庭👨‍👩‍👧‍👦。"] +
             (0..<60).map { "第\($0)段：" + String(repeating: "山川与星河都在这里，每个段落的末尾必须保留。", count: 5) + "段落结束。" }
         let textChapter = chapter()
         let layout = TextChapterLayout(textChapter: textChapter, textPages: [], book: book,
@@ -49,6 +49,15 @@ final class ReadingAndSearchTests: XCTestCase {
         XCTAssertGreaterThan(textChapter.pageSize, 4)
         func compact(_ text: String) -> String { String(text.filter { !$0.isWhitespace }) }
         XCTAssertEqual(compact(textChapter.getContent()), compact("测试章节" + paragraphs.joined()))
+        let firstBodyLine = try XCTUnwrap(textChapter.pages.first?.lines.first(where: { !$0.isTitle }))
+        XCTAssertEqual(firstBodyLine.text.prefix(while: { $0.isWhitespace }).count,
+                       ReadBookConfig.paragraphIndent.length, "书源已有缩进时不能再次叠加")
+        for page in textChapter.pages {
+            for line in page.lines {
+                XCTAssertGreaterThanOrEqual(CGFloat(line.lineTop), provider.paddingTop)
+                XCTAssertLessThanOrEqual(CGFloat(line.lineBottom), provider.visibleBottom + 0.01)
+            }
+        }
         let measure = TextMeasure(font: .systemFont(ofSize: 20))
         let measured = measure.measureTextSplit(text: "Wi👨‍👩‍👧‍👦e\u{301}")
         XCTAssertEqual(measured.strings.count, 4)
