@@ -102,6 +102,27 @@ func checkExtraction() throws {
     check(engine.getString(ruleStr: "{{'$.name'}}", elementContext: jsonElements[0]) == "JSON书籍", "JSON inline JavaScript still works")
 }
 
+func checkAndroidHTMLRules() throws {
+    let body = """
+    <ul class="librarylist"><li><div class="info"><span><a href="/book/1">凡人修仙传</a></span><span><a>忘语</a></span></div></li>
+    <li><div class="info"><span><a href="/book/2">斗破苍穹</a></span><span><a>天蚕土豆</a></span></div></li></ul>
+    <div id="chaptercontent" class="article-content font16"><p>第一段正文</p><p>第二段正文</p></div><a href="/toc">点击阅读</a>
+    <a data-user="reader@example.com" href="/quoted">属性值含分隔符</a>
+    """
+    let elements = try engine.getElements(ruleStr: "class.librarylist@tag.li", body: body, baseUrl: baseURL)
+    check(elements.count == 2, "Android class/tag list rules preserve book result elements")
+    check(engine.getString(ruleStr: ".info@tag.span.0@tag.a@text", elementContext: elements[0]) == "凡人修仙传", "Android chained selector extracts a book name")
+    check(engine.getString(ruleStr: ".info@tag.span.-1@tag.a@text", elementContext: elements[0]) == "忘语", "Android negative selector index extracts the author")
+    check(engine.getString(ruleStr: ".info@tag.span.0@tag.a@href", elementContext: elements[1]) == "https://example.com/book/2", "Android chained selector resolves book links")
+    check(engine.getString(ruleStr: ".info@tag.span.99@text", elementContext: elements[0]).isEmpty, "out-of-range Android selector indexes return empty")
+    check(try engine.getElements(ruleStr: "tag.missing||class.librarylist@children", body: body, baseUrl: baseURL).count == 2, "Android fallback list rules use the first nonempty selection")
+    let root = ElementContext(element: try SwiftSoup.parse(body), baseUrl: baseURL)
+    check(engine.getString(ruleStr: "class.article-content font16@tag.p.-1@text", elementContext: root) == "第二段正文", "multiple Android class names and negative indexes select chapter content")
+    check(engine.getString(ruleStr: "text.点击阅读@href", elementContext: root) == "https://example.com/toc", "Android text selector resolves the directory link")
+    check(engine.getString(ruleStr: "[data-user='reader@example.com']@href", elementContext: root) == "https://example.com/quoted", "CSS quoted attributes keep embedded at signs")
+    check(try engine.getElements(ruleStr: "class.librarylist@tag.li.0,1", body: body, baseUrl: baseURL).count == 2, "Android selector accepts multiple indexes")
+}
+
 func checkInnerRules() {
     let root: [String: Any] = ["index": 0, "items": [["name": "嵌套规则书籍"]]]
     check(JSONPathParser.evaluate(path: "$.items[{$.index}].name", root: root).first as? String == "嵌套规则书籍",
@@ -226,6 +247,7 @@ default:
     checkUnicode()
     try checkJavaScriptInputs()
     try checkExtraction()
+    try checkAndroidHTMLRules()
     checkInnerRules()
     checkConcurrentParsing()
     await checkSourceConcurrency()

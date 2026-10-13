@@ -544,8 +544,8 @@ class RuleEngine {
             }
         } else {
             // CSS
-            let selected = try doc.select(rule)
-            elements = selected.array().map { ElementContext(element: $0, baseUrl: baseUrl) }
+            elements = try HTMLRuleSelector.select(rule, from: doc)
+                .map { ElementContext(element: $0, baseUrl: baseUrl) }
         }
         
         if reverse { elements.reverse() }
@@ -838,22 +838,22 @@ class RuleEngine {
     }
 
     private func chainedCSSValues(for rule: String, input: Any, baseUrl: String?) -> [Any] {
-        let (selector, attr) = parseChainedCSSSelector(rule)
+        let (selector, attr) = HTMLRuleSelector.splitValueRule(rule)
 
         do {
             if let document = input as? SwiftSoup.Document {
-                let elements = selector.isEmpty ? [document] : try document.select(selector).array()
+                let elements = try HTMLRuleSelector.select(selector, from: document)
                 return mapCSSElements(elements, attr: attr, baseUrl: baseUrl)
             }
 
             if let element = input as? SwiftSoup.Element {
-                let elements = selector.isEmpty ? [element] : try element.select(selector).array()
+                let elements = try HTMLRuleSelector.select(selector, from: element)
                 return mapCSSElements(elements, attr: attr, baseUrl: baseUrl)
             }
 
             if let string = input as? String {
                 let document = try SwiftSoup.parse(string)
-                let elements = selector.isEmpty ? [document] : try document.select(selector).array()
+                let elements = try HTMLRuleSelector.select(selector, from: document)
                 return mapCSSElements(elements, attr: attr, baseUrl: baseUrl)
             }
         } catch {
@@ -913,6 +913,100 @@ class RuleEngine {
 }
 
 // MARK: - CSS 解析器 (SwiftSoup)
+
+/// Android 阅读的 HTML 规则逐段选择元素，最后一段才可能是属性名。
+/// CSS 选择器中的引号、括号和属性值仍按 CSS 解释。
+private enum HTMLRuleSelector {
+    static func splitValueRule(_ rule: String) -> (String, String?) {
+        var rule = rule.trimmingCharacters(in: .whitespacesAndNewlines)
+        if rule.lowercased().hasPrefix("@css:") { rule = String(rule.dropFirst(5)) }
+        if ["text", "textnodes", "html", "innerhtml", "outerhtml", "href", "src", "owntext"].contains(rule.lowercased()) {
+            return ("", rule)
+        }
+        guard var parts = RuleSplitter.splitTopLevel(rule, token: "@"), let last = parts.last else {
+            return (rule, nil)
+        }
+        let candidate = last.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !candidate.isEmpty && !candidate.contains(where: { $0.isWhitespace || ".[]()#>@".contains($0) }) {
+            parts.removeLast()
+            return (parts.joined(separator: "@"), candidate)
+        }
+        return (rule, nil)
+    }
+
+    static func select(_ expression: String, from root: SwiftSoup.Element) throws -> [SwiftSoup.Element] {
+        var rule = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+        if rule.lowercased().hasPrefix("@css:") { rule = String(rule.dropFirst(5)) }
+        if rule.isEmpty { return [root] }
+        if let alternatives = RuleSplitter.splitTopLevel(rule, token: "||") {
+            for alternative in alternatives {
+                let selected = try select(alternative, from: root)
+                if !selected.isEmpty { return selected }
+            }
+            return []
+        }
+        if let joined = RuleSplitter.splitTopLevel(rule, token: "&&") {
+            return try joined.flatMap { try select($0, from: root) }
+        }
+        let steps = RuleSplitter.splitTopLevel(rule, token: "@") ?? [rule]
+        var elements = [root]
+        for step in steps {
+            let step = step.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !step.isEmpty else { continue }
+            elements = try elements.flatMap { try selectStep(step, from: $0) }
+            if elements.isEmpty { break }
+        }
+        return elements
+    }
+
+    private static func selectStep(_ step: String, from root: SwiftSoup.Element) throws -> [SwiftSoup.Element] {
+        var selector = step
+        var indexes: [Int]?
+        // 数字后缀表示当前选择结果中的下标，负数从末尾计算。
+        if let separator = selector.lastIndex(of: ".") {
+            let suffix = String(selector[selector.index(after: separator)...])
+            let parts = suffix.split(separator: ",", omittingEmptySubsequences: false)
+            let parsed = parts.compactMap { Int($0) }
+            if !parts.isEmpty, parsed.count == parts.count {
+                indexes = parsed
+                selector = String(selector[..<separator])
+            }
+        }
+        let elements: [SwiftSoup.Element]
+        if selector == "children" {
+            elements = root.children().array()
+        } else if selector.hasPrefix("class.") {
+            let names = selector.dropFirst(6).split(whereSeparator: { $0.isWhitespace })
+            guard !names.isEmpty else { return [] }
+            let css = names.map { "." + cssEscape(String($0)) }.joined()
+            elements = try root.select(css).array()
+        } else if selector.hasPrefix("id.") {
+            elements = try root.select("#" + cssEscape(String(selector.dropFirst(3)))).array()
+        } else if selector.hasPrefix("tag.") {
+            elements = try root.select(String(selector.dropFirst(4))).array()
+        } else if selector.hasPrefix("text.") {
+            let text = String(selector.dropFirst(5))
+            elements = try root.select("*").array().filter { try $0.ownText().contains(text) }
+        } else {
+            elements = try root.select(selector).array()
+        }
+        guard let indexes else { return elements }
+        return indexes.compactMap { offset in
+            guard offset >= -elements.count && offset < elements.count else { return nil }
+            return elements[offset < 0 ? elements.count + offset : offset]
+        }
+    }
+
+    private static func cssEscape(_ name: String) -> String {
+        name.unicodeScalars.map { scalar in
+            if scalar.value >= 128 || CharacterSet.alphanumerics.contains(scalar) || scalar == "_" || scalar == "-" {
+                return String(scalar)
+            }
+            return "\\" + String(scalar)
+        }.joined()
+    }
+}
+
 class CSSParser: RuleExecutor {
     var kind: RuleKind { .css }
     
@@ -921,29 +1015,18 @@ class CSSParser: RuleExecutor {
     }
     
     func execute(_ rule: String, context: ExecutionContext) throws -> RuleResult {
-        let (selector, attr) = parseSelector(rule)
+        let (selector, selectedAttr) = HTMLRuleSelector.splitValueRule(rule)
+        let attr = selectedAttr ?? "text"
         let elements: [SwiftSoup.Element]
         let baseUrl = context.baseURL?.absoluteString
 
         if let document = context.document as? SwiftSoup.Document {
-            if selector.isEmpty {
-                elements = [document]
-            } else {
-                elements = try document.select(selector).array()
-            }
+            elements = try HTMLRuleSelector.select(selector, from: document)
         } else if let element = context.document as? SwiftSoup.Element {
-            if selector.isEmpty {
-                elements = [element]
-            } else {
-                elements = try element.select(selector).array()
-            }
+            elements = try HTMLRuleSelector.select(selector, from: element)
         } else if let html = context.document as? String {
             let document = try SwiftSoup.parse(html)
-            if selector.isEmpty {
-                elements = [document]
-            } else {
-                elements = try document.select(selector).array()
-            }
+            elements = try HTMLRuleSelector.select(selector, from: document)
         } else {
             throw RuleError.noDocument
         }
@@ -979,6 +1062,8 @@ class CSSParser: RuleExecutor {
             return try element.text()
         case "textnodes":
             return element.textNodes().map { $0.text() }.joined(separator: "\n")
+        case "owntext":
+            return try element.ownText()
         case "html", "innerhtml":
             return try element.html()
         case "outerhtml":

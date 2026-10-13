@@ -4,6 +4,18 @@ import UIKit
 @testable import Legado
 
 final class LegadoStabilityTests: XCTestCase {
+    func testAndroidHTMLSourceRulesSelectListsAndFields() throws {
+        let engine = RuleEngine()
+        let body = "<ul class='librarylist'><li><div class='info'><span><a href='/book'>凡人修仙传</a></span><span><a>忘语</a></span></div></li></ul>"
+        let items = try engine.getElements(ruleStr: "class.librarylist@tag.li", body: body, baseUrl: "https://example.invalid")
+        XCTAssertEqual(items.count, 1)
+        let item = try XCTUnwrap(items.first)
+        XCTAssertEqual(engine.getString(ruleStr: ".info@tag.span.0@tag.a@text", elementContext: item), "凡人修仙传")
+        XCTAssertEqual(engine.getString(ruleStr: ".info@tag.span.-1@tag.a@text", elementContext: item), "忘语")
+        XCTAssertEqual(engine.getString(ruleStr: ".info@tag.span.0@tag.a@href", elementContext: item), "https://example.invalid/book")
+        XCTAssertTrue(engine.getString(ruleStr: ".info@tag.span.999@text", elementContext: item).isEmpty)
+    }
+
     func testSerializedNumbersAndMissingInnerRules() throws {
         let engine = RuleEngine()
         let body = "{\"items\":[{\"idx\":0,\"titles\":[\"测试书籍\"]},{\"titles\":[\"缺字段\"]}]}"
