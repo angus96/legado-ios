@@ -509,7 +509,7 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
             return false
         }
 
-        func playerViewController(_ playerViewController: AVPlayerViewController, restoreUserInterfaceForPictureInPictureWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
+        func playerViewController(_ playerViewController: AVPlayerViewController, restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
             completionHandler(true)
         }
     }

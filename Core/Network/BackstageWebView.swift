@@ -510,17 +510,3 @@ private enum WebViewFetchError: LocalizedError {
         }
     }
 }
-
-// MARK: - DispatchQueue 扩展
-
-private extension DispatchQueue {
-    static func milliseconds(_ ms: Int) -> DispatchTime {
-        return .now() + .milliseconds(ms)
-    }
-}
-
-private extension DispatchTimeInterval {
-    static func milliseconds(_ ms: Int) -> DispatchTimeInterval {
-        return .milliseconds(ms)
-    }
-}

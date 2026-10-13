@@ -1,5 +1,6 @@
 import XCTest
 import CoreData
+import UIKit
 @testable import Legado
 
 final class LegadoStabilityTests: XCTestCase {
@@ -38,6 +39,13 @@ final class LegadoStabilityTests: XCTestCase {
         let response = try await BackstageWebView(html: "<html><body>测试正文</body></html>",
                                                   javaScript: "document.body.textContent", delayTime: 0, timeout: 5000).getStrResponse()
         XCTAssertEqual(response.body, "测试正文")
+        do {
+            _ = try await BackstageWebView(html: "<html><body>超时</body></html>",
+                                           delayTime: 1000, timeout: 10).getStrResponse()
+            XCTFail("超时请求仍返回正文")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("超时"))
+        }
         let cancelled = Task { @MainActor in
             try await BackstageWebView(html: "<html><body>取消</body></html>", delayTime: Int64.max, timeout: Int64.max).getStrResponse()
         }
@@ -48,6 +56,46 @@ final class LegadoStabilityTests: XCTestCase {
         let next = try await BackstageWebView(html: "<html><body>继续</body></html>",
                                               javaScript: "document.body.textContent", timeout: 5000).getStrResponse()
         XCTAssertEqual(next.body, "继续")
+    }
+
+    @MainActor
+    func testConcurrentImageDownloadsCompleteAndShareRequest() async throws {
+        let modelURL = try XCTUnwrap(Bundle.main.url(forResource: "Legado", withExtension: "momd"))
+        let model = try XCTUnwrap(NSManagedObjectModel(contentsOf: modelURL))
+        let container = NSPersistentContainer(name: "ImageTest", managedObjectModel: model)
+        let store = NSPersistentStoreDescription()
+        store.type = NSInMemoryStoreType
+        container.persistentStoreDescriptions = [store]
+        container.loadPersistentStores { _, error in XCTAssertNil(error) }
+        let context = container.newBackgroundContext()
+        let base = ProcessInfo.processInfo.environment["LEGADO_FIXTURE_URL"] ?? "http://127.0.0.1:8766"
+        let (book, source) = try await context.perform { () -> (Book, BookSource) in
+            let book = Book.create(in: context)
+            book.name = UUID().uuidString
+            let source = BookSource.create(in: context)
+            source.bookSourceUrl = base
+            source.header = "{\"X-Legado-Test\":\"image-cache\"}"
+            try context.save()
+            return (book, source)
+        }
+        let key = UUID().uuidString
+        let src = base + "/image.png?key=" + key
+        let fileURL = BookHelp.getImage(book, src)
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        // A failed response must leave no file and allow the next request to retry.
+        await BookHelp.saveImage(bookSource: nil, book: book, src: src)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<32 {
+                group.addTask { await BookHelp.saveImage(bookSource: source, book: book, src: src) }
+            }
+        }
+        let data = try Data(contentsOf: fileURL)
+        XCTAssertNotNil(UIImage(data: data))
+        let countURL = try XCTUnwrap(URL(string: base + "/image-count?key=" + key))
+        let (countData, _) = try await URLSession.shared.data(from: countURL)
+        let counts = try XCTUnwrap(JSONSerialization.jsonObject(with: countData) as? [String: Int])
+        XCTAssertEqual(counts["requests"], 2, "一次失败和一次并发共享下载，不能重复请求")
     }
 
     func testHTTPAndDatabaseSourceReplacement() async throws {

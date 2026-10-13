@@ -208,35 +208,20 @@ enum ImageProvider {
         src: String,
         bookSource: BookSource?
     ) async -> URL {
-        // 原版使用 withContext(IO)
-        return await withCheckedContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                let vFileURL = BookHelp.getImage(book, src)
-                
-                if !BookHelp.isImageExist(book, src) {
-                    // 原版根据书籍类型处理: epub/pdf/mobi/网络
-                    var inputStream: Data? = nil
-                    
-                    if book.isEpub {
-                        inputStream = EpubFile.getImage(book, src)
-                    } else if book.isPdf {
-                        inputStream = PdfFile.getImage(book, src)
-                    } else if book.isMobi {
-                        inputStream = MobiFile.getImage(book, src)
-                    } else {
-                        // 网络图片: BookHelp.saveImage(bookSource, book, src)
-                        await BookHelp.saveImage(bookSource: bookSource, book: book, src: src)
-                    }
-                    
-                    // 保存输入流到文件 (原版 line 141-146)
-                    if let data = inputStream {
-                        try? data.write(to: vFileURL)
-                    }
-                }
-                
-                continuation.resume(returning: vFileURL)
+        let fileURL = BookHelp.getImage(book, src)
+        guard !FileManager.default.fileExists(atPath: fileURL.path) else { return fileURL }
+        if src.hasPrefix("http://") || src.hasPrefix("https://") {
+            await BookHelp.saveImage(bookSource: bookSource, book: book, src: src)
+        } else {
+            let data: Data? = try? ManagedObjectAccess.read(book) { book -> Data? in
+                if book.isEpub { return EpubFile.getImage(book, src) }
+                if book.isPdf { return PdfFile.getImage(book, src) }
+                if book.isMobi { return MobiFile.getImage(book, src) }
+                return nil
             }
+            if let data { try? data.write(to: fileURL, options: .atomic) }
         }
+        return fileURL
     }
     
     // MARK: - 获取图片尺寸 (对照原版 line 155-174)
@@ -284,10 +269,10 @@ enum ImageProvider {
         height: Int? = nil
     ) -> UIImage {
         // 原版 line 186-189: src 为空白时的处理
-        if book.getUseReplaceRule() && src.isEmpty {
-            book.setUseReplaceRule(false)
-            // 原版使用 toastOnUi，iOS 简化处理
-            print("[ImageProvider] error_image_url_empty")
+        if src.isEmpty {
+            try? ManagedObjectAccess.read(book) { book in
+                if book.getUseReplaceRule() { book.setUseReplaceRule(false) }
+            }
         }
         
         let vFileURL = BookHelp.getImage(book, src)

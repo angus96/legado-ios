@@ -223,6 +223,7 @@ final class Router: ObservableObject {
 // MARK: - View Extension
 
 extension View {
+    @MainActor
     func withRouter() -> some View {
         self.environmentObject(Router.shared)
     }

@@ -34,9 +34,7 @@ enum BookHelp {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
     }
     
-    /// 图片下载 Mutex 防重复 (对照原版 line 61)
-    private static var downloadImages: [String: NSLock] = [:]
-    private static let downloadLock = NSLock()
+    private static let imageDownloads = ImageDownloadCoordinator()
     
     // MARK: - 缓存清理 (对照原版 line 65-74)
     
@@ -57,9 +55,11 @@ enum BookHelp {
     /// 获取图片缓存路径
     /// 对照原版 fun getImage(book: Book, src: String): File (line 264-271)
     static func getImage(_ book: Book, _ src: String) -> URL {
+        let folder = (try? ManagedObjectAccess.read(book) { $0.getFolderName() })
+            ?? book.objectID.uriRepresentation().absoluteString.md5()
         let imageDir = downloadDir
             .appendingPathComponent(cacheFolderName)
-            .appendingPathComponent(book.getFolderName())
+            .appendingPathComponent(folder)
             .appendingPathComponent(cacheImageFolderName)
         
         try? FileManager.default.createDirectory(at: imageDir, withIntermediateDirectories: true)
@@ -103,59 +103,24 @@ enum BookHelp {
         src: String,
         chapter: BookChapter? = nil
     ) async {
-        if isImageExist(book, src) {
-            return
-        }
-        
-        let mutex = getMutex(for: src)
-        mutex.lock()
-        
-        defer {
-            removeMutex(for: src)
-            mutex.unlock()
-        }
-        
-        if isImageExist(book, src) {
-            return
-        }
-        
         do {
-            let bytes = await downloadImageBytes(src, bookSource: bookSource)
-            if let data = bytes {
-                writeImage(book, src, data)
-            }
+            let source = try bookSource.map { try BookSourceSnapshot.capture($0) }
+            let fileURL = getImage(book, src)
+            guard let request = imageRequest(src, source: source) else { return }
+            await imageDownloads.save(request: request, to: fileURL)
         } catch {
-            print("[BookHelp] 图片下载失败: \(src) - \(error)")
+            return
         }
-    }
-    
-    // MARK: - Mutex 管理
-    
-    private static func getMutex(for src: String) -> NSLock {
-        downloadLock.lock()
-        defer { downloadLock.unlock() }
-        if let mutex = downloadImages[src] {
-            return mutex
-        }
-        let mutex = NSLock()
-        downloadImages[src] = mutex
-        return mutex
-    }
-    
-    private static func removeMutex(for src: String) {
-        downloadLock.lock()
-        downloadImages.removeValue(forKey: src)
-        downloadLock.unlock()
     }
     
     // MARK: - 图片下载
     
-    private static func downloadImageBytes(_ src: String, bookSource: BookSource?) async -> Data? {
+    private static func imageRequest(_ src: String, source: BookSourceSnapshot?) -> URLRequest? {
         guard let url = URL(string: src) else { return nil }
         
         var request = URLRequest(url: url)
         
-        if let source = bookSource {
+        if let source {
             var headers: [String: String] = [:]
             
             if let headerString = source.header,
@@ -175,16 +140,7 @@ enum BookHelp {
             }
         }
         
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                return nil
-            }
-            return data
-        } catch {
-            return nil
-        }
+        return request
     }
     
     // MARK: - 内容相关 (对照原版 line 176-194)
@@ -276,6 +232,32 @@ enum BookHelp {
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(atPath: url.path, contents: nil)
         }
+    }
+}
+
+/// Await one shared download instead of holding an OS-thread lock across a suspension.
+private actor ImageDownloadCoordinator {
+    private var pending: [URL: Task<Void, Never>] = [:]
+
+    func save(request: URLRequest, to fileURL: URL) async {
+        if FileManager.default.fileExists(atPath: fileURL.path) { return }
+        if let task = pending[fileURL] {
+            await task.value
+            return
+        }
+        let task = Task {
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let response = response as? HTTPURLResponse,
+                      (200..<300).contains(response.statusCode), !data.isEmpty else { return }
+                try data.write(to: fileURL, options: .atomic)
+            } catch {
+                return
+            }
+        }
+        pending[fileURL] = task
+        await task.value
+        pending[fileURL] = nil
     }
 }
 
