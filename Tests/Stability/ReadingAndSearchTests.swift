@@ -22,9 +22,20 @@ final class ReadingAndSearchTests: XCTestCase {
                     sameTitleRemoved: false, isVip: false, isPay: false, effectiveReplaceRules: nil)
     }
 
+    private func makeBook(in context: NSManagedObjectContext) -> Book {
+        let book = Book.create(in: context)
+        book.name = "测试书籍"
+        book.author = "测试作者"
+        book.origin = "https://example.invalid"
+        book.originName = "测试书源"
+        book.bookUrl = "https://example.invalid/book"
+        book.tocUrl = "https://example.invalid/toc"
+        return book
+    }
+
     func testLayoutPreservesShortLongAndUnicodeParagraphsAndDrawsEveryLine() async throws {
         let database = try container()
-        let book = Book.create(in: database.viewContext)
+        let book = makeBook(in: database.viewContext)
         let provider = ChapterProvider.shared
         provider.updateViewSize(width: 390, height: 720)
         provider.updateStyle(titleFont: .systemFont(ofSize: 22), contentFont: .systemFont(ofSize: 20))
@@ -101,7 +112,7 @@ final class ReadingAndSearchTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let book = Book.create(in: context)
+        let book = makeBook(in: context)
         book.name = "EPUB 测试"; book.origin = "local"; book.bookUrl = directory.appendingPathComponent("sample.epub").path
         book.type = 1; book.folderName = directory.path; book.totalChapterNum = 2
         let chapters = try (0..<2).map { index -> BookChapter in
@@ -149,7 +160,7 @@ final class ReadingAndSearchTests: XCTestCase {
     func testDeletionCanBeRepeatedAndFileImportUpdatesExistingSource() async throws {
         let database = try container()
         let context = database.viewContext
-        let book = Book.create(in: context)
+        let book = makeBook(in: context)
         book.name = "删除测试"
         try context.save()
         let shelf = BookshelfViewModel(context: context)
@@ -194,7 +205,7 @@ final class ReadingAndSearchTests: XCTestCase {
             return source
         }
         try database.viewContext.save()
-        let model = SearchViewModel(context: database.viewContext, sourceTimeout: 0.15) { source, key in
+        let model = SearchViewModel(context: database.viewContext, sourceTimeout: 0.15, selectionDefaults: nil) { source, key in
             if ["源0", "源1", "源2", "源3", "源4"].contains(source.bookSourceName) {
                 try await Task.sleep(nanoseconds: 10_000_000_000)
             } else { try await Task.sleep(nanoseconds: 5_000_000) }
@@ -219,10 +230,32 @@ final class ReadingAndSearchTests: XCTestCase {
         XCTAssertFalse(model.isSearching)
     }
 
+    func testSearchRemembersSelectedSourcesAndAnEmptySelection() throws {
+        let database = try container()
+        let suite = "SearchSelectionTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let sources = (0..<3).map { index -> BookSource in
+            let source = BookSource.create(in: database.viewContext)
+            source.bookSourceName = "源\(index)"
+            source.bookSourceUrl = "https://example.invalid/\(index)"
+            source.searchUrl = "/search"
+            return source
+        }
+        try database.viewContext.save()
+        let first = SearchViewModel(context: database.viewContext, selectionDefaults: defaults)
+        XCTAssertEqual(first.selectedSources.count, 3)
+        first.selectedSources = [sources[1]]
+        let reopened = SearchViewModel(context: database.viewContext, selectionDefaults: defaults)
+        XCTAssertEqual(reopened.selectedSources.map(\.sourceId), [sources[1].sourceId])
+        reopened.selectedSources = []
+        XCTAssertTrue(SearchViewModel(context: database.viewContext, selectionDefaults: defaults).selectedSources.isEmpty)
+    }
+
     func testCrossChapterBackwardsReflowAndScrollingKeepTextAndPosition() async throws {
         let database = try container()
         let context = database.viewContext
-        let book = Book.create(in: context)
+        let book = makeBook(in: context)
         book.name = "跨章阅读"; book.origin = "https://example.invalid"; book.bookUrl = book.origin + "/book"
         book.totalChapterNum = 2
         let files = (0..<2).map { _ in FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString) }

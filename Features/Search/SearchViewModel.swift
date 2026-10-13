@@ -11,7 +11,12 @@ class SearchViewModel: ObservableObject {
     @Published var searchResults: [SearchResult] = []
     @Published var isSearching = false
     @Published var errorMessage: String?
-    @Published var selectedSources: [BookSource] = []
+    @Published var selectedSources: [BookSource] = [] {
+        didSet {
+            selectionDefaults?.set(selectedSources.filter { !$0.isDeleted && $0.managedObjectContext != nil }
+                .map { $0.sourceId.uuidString }, forKey: Self.selectionKey)
+        }
+    }
     @Published private(set) var completedSourceCount = 0
     @Published private(set) var totalSourceCount = 0
     @Published private(set) var failedSourceCount = 0
@@ -21,21 +26,31 @@ class SearchViewModel: ObservableObject {
 
     private let operation: SearchOperation
     private let sourceTimeout: TimeInterval
+    private let selectionDefaults: UserDefaults?
+    private static let selectionKey = "search.selectedSourceIDs"
     private var searchTask: Task<Void, Never>?
     private var searchID = UUID()
 
     init(context: NSManagedObjectContext = CoreDataStack.shared.viewContext,
          sourceTimeout: TimeInterval = 12,
+         selectionDefaults: UserDefaults? = .standard,
          operation: @escaping SearchOperation = { source, keyword in
              try await WebBook.searchBook(source: source, key: keyword, timeout: 12)
          }) {
         self.operation = operation
         self.sourceTimeout = sourceTimeout
+        self.selectionDefaults = selectionDefaults
         let request = BookSource.fetchRequest()
         request.predicate = NSPredicate(format: "enabled == YES AND searchUrl != nil AND searchUrl != ''")
         request.sortDescriptors = [NSSortDescriptor(key: "weight", ascending: false),
                                    NSSortDescriptor(key: "respondTime", ascending: true)]
-        selectedSources = (try? context.fetch(request)) ?? []
+        let sources = (try? context.fetch(request)) ?? []
+        if let saved = selectionDefaults?.stringArray(forKey: Self.selectionKey) {
+            let selectedIDs = Set(saved)
+            selectedSources = sources.filter { selectedIDs.contains($0.sourceId.uuidString) }
+        } else {
+            selectedSources = sources
+        }
     }
 
     func cancelSearch() {

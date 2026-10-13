@@ -10,6 +10,7 @@ final class LegadoUITests: XCTestCase {
         app.launchArguments = ["-com.apple.CoreData.ConcurrencyDebug", "1"]
         app.launch()
         XCTAssertTrue(app.staticTexts["测试书籍"].firstMatch.waitForExistence(timeout: 15))
+        capture(app, name: "书架")
         app.staticTexts["测试书籍"].firstMatch.tap()
         let canvas = app.descendants(matching: .any)["reader.canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 15))
@@ -26,6 +27,7 @@ final class LegadoUITests: XCTestCase {
         canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let theme = app.buttons["reader.theme"]
         XCTAssertTrue(theme.waitForExistence(timeout: 10))
+        capture(app, name: "阅读菜单")
         theme.tap()
         canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let darkReader = XCTAttachment(screenshot: app.screenshot())
@@ -69,9 +71,18 @@ final class LegadoUITests: XCTestCase {
         app.staticTexts["测试书籍"].firstMatch.tap()
         let readButton = app.buttons["bookDetail.read"].firstMatch
         XCTAssertTrue(readButton.waitForExistence(timeout: 10), "搜索结果应进入详情页")
+        capture(app, name: "书籍详情")
         readButton.tap()
         XCTAssertTrue(canvas.waitForExistence(timeout: 10))
         let searchedReader = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "正文"), object: canvas)
         wait(for: [searchedReader], timeout: 15)
+    }
+
+    @MainActor
+    private func capture(_ app: XCUIApplication, name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 }

@@ -48,17 +48,19 @@ struct BookDetailView: View {
         }
         .navigationTitle("书籍详情")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(Color(.systemBackground), for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 16) {
                     Button(action: { showingEditSheet = true }) {
                         Image(systemName: "pencil")
-                            .foregroundColor(.white)
+                            .foregroundColor(.primary)
                     }
                     
                     Button(action: { viewModel.shareBook() }) {
                         Image(systemName: "square.and.arrow.up")
-                            .foregroundColor(.white)
+                            .foregroundColor(.primary)
                     }
                     
                     Menu {
@@ -112,7 +114,7 @@ struct BookDetailView: View {
                         }
                     } label: {
                         Image(systemName: "ellipsis")
-                            .foregroundColor(.white)
+                            .foregroundColor(.primary)
                     }
                 }
             }

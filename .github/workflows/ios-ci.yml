@@ -95,6 +95,19 @@ jobs:
           ONLY_ACTIVE_ARCH=YES \
           IPHONEOS_DEPLOYMENT_TARGET=16.0
 
+    - name: Export Test Screenshots
+      if: always()
+      continue-on-error: true
+      run: python3 scripts/export_test_screenshots.py "$RUNNER_TEMP/LegadoTests.xcresult" "$RUNNER_TEMP/test-screenshots"
+
+    - name: Upload Test Screenshots
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: Legado-test-screenshots
+        path: ${{ runner.temp }}/test-screenshots
+        if-no-files-found: ignore
+
     - name: Package Unsigned IPA
       if: success()
       run: |
