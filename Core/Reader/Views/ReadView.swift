@@ -348,8 +348,6 @@ class ReadView: UIView, ReadViewProtocol {
         pageDelegate?.onScroll()
         setNeedsDisplay()
         
-        let offset = touchY - lastY
-        touchY -= offset - offset.rounded()
     }
     
     func invalidate() {
@@ -380,7 +378,6 @@ class ReadView: UIView, ReadViewProtocol {
         (curPage as? UIView)?.setNeedsDisplay()
         (prevPage as? UIView)?.setNeedsDisplay()
         (nextPage as? UIView)?.setNeedsDisplay()
-        (pageDelegate as? ScrollPageDelegate)?.invalidateImages()
         accessibilityLabel = curPage.textPage?.text
         isAccessibilityElement = true
         setNeedsDisplay()

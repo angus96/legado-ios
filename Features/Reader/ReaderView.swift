@@ -252,7 +252,7 @@ struct ReaderView: View {
                 PageKeyDialog(isPresented: $showingPageKey)
             }
             .sheet(isPresented: $showingPadding) {
-                PaddingConfigDialog(isPresented: $showingPadding)
+                PaddingConfigDialog(viewModel: viewModel, isPresented: $showingPadding)
             }
             .sheet(isPresented: $showingTip) {
                 TipConfigDialog(isPresented: $showingTip)

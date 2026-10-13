@@ -56,6 +56,8 @@ final class ReadingAndSearchTests: XCTestCase {
             for line in page.lines {
                 XCTAssertGreaterThanOrEqual(CGFloat(line.lineTop), provider.paddingTop)
                 XCTAssertLessThanOrEqual(CGFloat(line.lineBottom), provider.visibleBottom + 0.01)
+                XCTAssertGreaterThanOrEqual(CGFloat(line.lineStart), provider.paddingLeft - 0.01)
+                XCTAssertLessThanOrEqual(CGFloat(line.lineEnd), provider.visibleRight + 0.01)
             }
         }
         let measure = TextMeasure(font: .systemFont(ofSize: 20))
@@ -102,6 +104,105 @@ final class ReadingAndSearchTests: XCTestCase {
             add(attachment)
         }
         reader.dispose()
+    }
+
+    func testPunctuationAndLetterSpacingStayInsideBothMargins() async throws {
+        let database = try container()
+        let book = makeBook(in: database.viewContext)
+        let provider = ChapterProvider.shared
+        let oldSize = CGSize(width: provider.viewWidth, height: provider.viewHeight)
+        let oldFont = provider.contentFont
+        let oldTitleFont = provider.titleFont
+        let oldSpacing = provider.letterSpacing
+        let oldPadding = [provider.paddingLeft, provider.paddingTop, provider.paddingRight, provider.paddingBottom]
+        defer {
+            provider.updateViewSize(width: oldSize.width, height: oldSize.height)
+            provider.updateStyle(titleFont: oldTitleFont, contentFont: oldFont)
+            provider.letterSpacing = oldSpacing
+            provider.updatePadding(left: oldPadding[0], top: oldPadding[1], right: oldPadding[2], bottom: oldPadding[3])
+        }
+        let paragraphs = [String(repeating: "山川，。星河《（日月）》！？", count: 30),
+                          String(repeating: "Latin Wi e\u{301} 👨‍👩‍👧‍👦中文；：", count: 20)]
+        for width in [320.0, 393, 430] {
+            for size in [18.0, 24, 30] {
+                for spacing in [0.0, 2, 5] {
+                    provider.updateViewSize(width: width, height: 720)
+                    provider.updatePadding(left: 16, top: 20, right: 16, bottom: 20)
+                    provider.updateStyle(titleFont: .systemFont(ofSize: size + 2), contentFont: .systemFont(ofSize: size))
+                    provider.letterSpacing = spacing
+                    let text = chapter()
+                    let layout = TextChapterLayout(textChapter: text, textPages: [], book: book,
+                                                   bookContent: BookContent(textList: paragraphs))
+                    await layout.startLayout()
+                    XCTAssertNil(layout.exception)
+                    for line in text.pages.flatMap(\.lines) {
+                        XCTAssertGreaterThanOrEqual(CGFloat(line.lineStart), 16 - 0.01)
+                        XCTAssertLessThanOrEqual(CGFloat(line.lineEnd), width - 16 + 0.01,
+                                                "标点、字间距和组合字符不能占用边距：\(line.text)")
+                    }
+                    XCTAssertEqual(String(text.getContent().filter { !$0.isWhitespace }),
+                                   String(("测试章节" + paragraphs.joined()).filter { !$0.isWhitespace }))
+                }
+            }
+        }
+    }
+
+    func testAllFourMarginsAreSavedAndUsedForLayout() {
+        let defaults = UserDefaults.standard
+        let keys = ["reader.pageMargin", "readerPaddingLeft", "readerPaddingRight", "readerPaddingTop", "readerPaddingBottom"]
+        let saved = keys.map { defaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+        }
+        keys.forEach { defaults.removeObject(forKey: $0) }
+        let initial = ReaderViewModel()
+        XCTAssertEqual(initial.pagePadding.leading, initial.pagePadding.trailing)
+        initial.pagePadding = .init(top: 24, leading: 28, bottom: 30, trailing: 28)
+        let reopened = ReaderViewModel()
+        XCTAssertEqual(reopened.pagePadding, initial.pagePadding)
+        reopened.configureTextLayout(size: CGSize(width: 390, height: 720))
+        XCTAssertEqual(ChapterProvider.shared.visibleWidth, 334)
+        XCTAssertEqual(ChapterProvider.shared.visibleHeight, 666)
+        XCTAssertEqual(ChapterProvider.shared.paddingLeft, 28)
+        XCTAssertEqual(ChapterProvider.shared.paddingRight, 28)
+    }
+
+    func testScrollingReusesPageImagesAndPreservesFractionalMovement() throws {
+        let text = chapter()
+        for index in 0..<5 {
+            let page = TextPage(text: "第\(index)页正文")
+            page.index = index
+            page.isCompleted = true
+            text.appendPage(page)
+        }
+        text.isCompleted = true
+        ReadBook.shared.msg = nil
+        let source = FixturePageSource(chapter: text)
+        source.pageIndex = 1
+        let view = ReadView(frame: CGRect(x: 0, y: 0, width: 390, height: 720))
+        let pages = (0..<3).map { _ in CountingPageView(frame: view.bounds) }
+        view.prevPage = pages[0]; view.curPage = pages[1]; view.nextPage = pages[2]
+        view.pageFactory = TextPageFactory(dataSource: source)
+        view.upContent()
+        let scroll = ScrollPageDelegate(readView: view)
+        view.pageDelegate = scroll
+        scroll.setViewSize(width: 390, height: 720)
+        scroll.setBitmap()
+        XCTAssertEqual(pages.reduce(0) { $0 + $1.renderCount }, 3)
+        for _ in 0..<20 { view.upContent(); scroll.setBitmap() }
+        XCTAssertEqual(pages.reduce(0) { $0 + $1.renderCount }, 3, "重复触摸或界面更新应复用整页图片")
+        source.pageIndex = 2
+        view.upContent(); scroll.setBitmap()
+        XCTAssertEqual(pages.reduce(0) { $0 + $1.renderCount }, 4, "跨一页只需绘制一个新相邻页")
+        view.setStartPoint(0, 0, anim: false)
+        for frame in 1...30 { view.setTouchPoint(0, -CGFloat(frame) * 0.25, anim: false) }
+        XCTAssertEqual(scroll.offset, -7.5, accuracy: 0.001, "惯性滚动的小数位移不能在每帧取整后累积误差")
+        pages.forEach { $0.backgroundColor = .black }
+        scroll.setBitmap()
+        XCTAssertEqual(pages.reduce(0) { $0 + $1.renderCount }, 7, "换主题后应重新绘制")
+        view.dispose()
     }
 
     private func rgba(_ image: UIImage) throws -> [UInt8] {
@@ -326,4 +427,13 @@ private final class FixturePageSource: PageDataSource {
     init(chapter: TextChapter) { currentChapter = chapter }
     func hasPrevChapter() -> Bool { false }
     func hasNextChapter() -> Bool { false }
+}
+
+@MainActor
+private final class CountingPageView: PageView {
+    private(set) var renderCount = 0
+    override func screenshot() -> UIImage? {
+        renderCount += 1
+        return super.screenshot()
+    }
 }

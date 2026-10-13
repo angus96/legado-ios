@@ -104,7 +104,7 @@ struct ReadStyleDialog: View {
         .onChange(of: textBold) { _ in viewModel.upPageAnim() }
         .onChange(of: paragraphIndentRaw) { _ in viewModel.upPageAnim() }
         .sheet(isPresented: $showingPaddingConfig) {
-            PaddingConfigDialog(isPresented: $showingPaddingConfig)
+            PaddingConfigDialog(viewModel: viewModel, isPresented: $showingPaddingConfig)
                 .presentationDetentsIfAvailable([.medium])
         }
         .sheet(isPresented: $showingTipConfig) {
@@ -347,20 +347,25 @@ extension View {
 // MARK: - Placeholders for secondary dialogs (A5 将替换)
 
 struct PaddingConfigDialog: View {
+    @ObservedObject var viewModel: ReaderViewModel
     @Binding var isPresented: Bool
-    @AppStorage("readerPaddingLeft") private var paddingLeft: Double = 16
-    @AppStorage("readerPaddingTop") private var paddingTop: Double = 16
-    @AppStorage("readerPaddingRight") private var paddingRight: Double = 16
-    @AppStorage("readerPaddingBottom") private var paddingBottom: Double = 16
+
+    private func padding(_ key: WritableKeyPath<EdgeInsets, CGFloat>) -> Binding<Double> {
+        Binding(get: { Double(viewModel.pagePadding[keyPath: key]) },
+                set: { viewModel.pagePadding[keyPath: key] = CGFloat($0) })
+    }
 
     var body: some View {
         NavigationView {
             Form {
                 Section("页面边距") {
-                    stepper("左边距", value: $paddingLeft)
-                    stepper("上边距", value: $paddingTop)
-                    stepper("右边距", value: $paddingRight)
-                    stepper("下边距", value: $paddingBottom)
+                    stepper("左边距", value: padding(\.leading))
+                    stepper("上边距", value: padding(\.top))
+                    stepper("右边距", value: padding(\.trailing))
+                    stepper("下边距", value: padding(\.bottom))
+                    Button("恢复默认边距") {
+                        viewModel.pagePadding = EdgeInsets(top: 20, leading: 16, bottom: 20, trailing: 16)
+                    }
                 }
             }
             .navigationTitle("边距设置")
@@ -379,8 +384,9 @@ struct PaddingConfigDialog: View {
             Spacer()
             Text("\(Int(value.wrappedValue))")
                 .foregroundColor(.secondary)
-            Stepper("", value: value, in: 0...64, step: 2)
+            Stepper(title, value: value, in: 0...64, step: 2)
                 .labelsHidden()
+                .accessibilityIdentifier("reader.padding.\(title)")
         }
     }
 }

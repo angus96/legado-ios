@@ -9,19 +9,59 @@ class ScrollPageDelegate: PageDelegate {
     private var currentImage: UIImage?
     private var previousImage: UIImage?
     private var nextImage: UIImage?
-    private weak var renderedPage: TextPage?
+    private struct Snapshot {
+        let page: TextPage
+        let image: UIImage
+    }
+    private struct Appearance: Equatable {
+        let size: CGSize
+        let font: UIFont
+        let titleFont: UIFont
+        let color: UIColor
+        let background: UIColor
+        let letterSpacing: CGFloat
+    }
+    private var snapshots: [ObjectIdentifier: Snapshot] = [:]
+    private var appearance: Appearance?
 
     func invalidateImages() {
         currentImage = nil
         previousImage = nil
         nextImage = nil
+        snapshots.removeAll()
+    }
+
+    override func setViewSize(width: CGFloat, height: CGFloat) {
+        if width != viewWidth || height != viewHeight { invalidateImages() }
+        super.setViewSize(width: width, height: height)
     }
 
     override func setBitmap() {
-        currentImage = curPage.screenshot()
-        previousImage = prevPage.screenshot()
-        nextImage = nextPage.screenshot()
-        renderedPage = curPage.textPage
+        let provider = ChapterProvider.shared
+        let updated = Appearance(size: CGSize(width: viewWidth, height: viewHeight),
+                                 font: provider.contentFont, titleFont: provider.titleFont,
+                                 color: provider.textColor,
+                                 background: (curPage as? UIView)?.backgroundColor ?? .white,
+                                 letterSpacing: provider.letterSpacing)
+        if appearance != updated {
+            invalidateImages()
+            appearance = updated
+        }
+        // 跨页后复用已有页面，只绘制新进入的相邻页。
+        currentImage = image(for: curPage)
+        previousImage = image(for: prevPage)
+        nextImage = image(for: nextPage)
+        let visible = Set([curPage, prevPage, nextPage].compactMap { $0.textPage }.map(ObjectIdentifier.init))
+        snapshots = snapshots.filter { visible.contains($0.key) }
+    }
+
+    private func image(for view: PageViewProtocol) -> UIImage? {
+        guard let page = view.textPage else { return nil }
+        let key = ObjectIdentifier(page)
+        if let cached = snapshots[key] { return cached.image }
+        guard let image = view.screenshot() else { return nil }
+        snapshots[key] = Snapshot(page: page, image: image)
+        return image
     }
 
     override func onDown() {
@@ -80,11 +120,13 @@ class ScrollPageDelegate: PageDelegate {
     }
 
     override func onDraw(_ context: CGContext) {
-        if renderedPage !== curPage.textPage { setBitmap() }
-        if currentImage == nil { setBitmap() }
+        setBitmap()
         currentImage?.draw(in: CGRect(x: 0, y: offset, width: viewWidth, height: viewHeight))
-        nextImage?.draw(in: CGRect(x: 0, y: offset + viewHeight, width: viewWidth, height: viewHeight))
-        previousImage?.draw(in: CGRect(x: 0, y: offset - viewHeight, width: viewWidth, height: viewHeight))
+        if offset < 0 {
+            nextImage?.draw(in: CGRect(x: 0, y: offset + viewHeight, width: viewWidth, height: viewHeight))
+        } else if offset > 0 {
+            previousImage?.draw(in: CGRect(x: 0, y: offset - viewHeight, width: viewWidth, height: viewHeight))
+        }
     }
 
     override func onScroll() { scroll(by: touchY - lastY) }
@@ -110,6 +152,12 @@ class ScrollPageDelegate: PageDelegate {
         stopScroll()
         readView?.onScrollAnimStop()
         readView?.isAbortAnim = false
+    }
+
+    override func onDestroy() {
+        super.onDestroy()
+        readView?.onScrollAnimStop()
+        invalidateImages()
     }
 
     override func nextPageByAnim(animationSpeed: Int) {

@@ -776,9 +776,7 @@ struct LogSheet: View {
     }
     
     private func loadLogs() async -> String {
-        guard let logPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent("legado.log") else {
-            return "日志文件不存在"
-        }
+        let logPath = URL(fileURLWithPath: DebugLogger.shared.logFilePath)
         do {
             return try String(contentsOf: logPath, encoding: .utf8)
         } catch {

@@ -26,6 +26,7 @@ class TextChapterLayout {
     private var pendingTextPage = TextPage()
     private var stringBuilder = StringBuilder()
     
+    private var lastLayoutYield = CACurrentMediaTime()
     var exception: Error?
     var isCompleted = false
     
@@ -107,7 +108,7 @@ class TextChapterLayout {
         let titleMode = ReadBookConfig.titleMode
         if titleMode != 2 {
             for titleLine in displayTitle.splitNotBlank("\n") {
-                await setTypeText(
+                try await setTypeText(
                     text: titleLine,
                     font: titlePaint,
                     textHeight: titlePaintTextHeight,
@@ -143,7 +144,7 @@ class TextChapterLayout {
                         let textRange = NSRange(location: start, length: match.range.location - start)
                         let text = (content as NSString).substring(with: textRange)
                         if !text.trimmingCharacters(in: .whitespaces).isEmpty {
-                            await setTypeText(
+                            try await setTypeText(
                                 text: text,
                                 font: contentPaint,
                                 textHeight: contentPaintTextHeight,
@@ -171,7 +172,7 @@ class TextChapterLayout {
                 if start < (content as NSString).length {
                     let text = (content as NSString).substring(from: start)
                     if !text.trimmingCharacters(in: .whitespaces).isEmpty {
-                        await setTypeText(
+                        try await setTypeText(
                             text: text,
                             font: contentPaint,
                             textHeight: contentPaintTextHeight,
@@ -183,7 +184,7 @@ class TextChapterLayout {
                 }
             } else {
                 // 纯文本内容
-                await setTypeText(
+                try await setTypeText(
                     text: content,
                     font: contentPaint,
                     textHeight: contentPaintTextHeight,
@@ -321,7 +322,7 @@ class TextChapterLayout {
         isFirstLine: Bool = true,
         emptyContent: Bool = false,
         isVolumeTitle: Bool = false
-    ) async {
+    ) async throws {
         let provider = ChapterProvider.shared
         let visibleWidth = provider.visibleWidth
         let visibleHeight = provider.visibleHeight
@@ -336,10 +337,6 @@ class TextChapterLayout {
                 + String(text.drop(while: { $0.isWhitespace }))
             : text
         // 测量文本宽度
-        let widthsArray = measureTextWidths(text, font: font)
-        let (words, widths) = measureTextSplit(text, widthsArray: widthsArray)
-        let desiredWidth = widths.reduce(0, +)
-        
         // 使用 iOS TextKit 进行布局
         let lines = createTextLayout(text: text, font: font, width: visibleWidth)
         
@@ -355,7 +352,13 @@ class TextChapterLayout {
         }
         
         // 逐行处理
-        for (lineIndex, layoutLine) in lines.enumerated() {
+        for layoutLine in lines {
+            try Task.checkCancellation()
+            if CACurrentMediaTime() - lastLayoutYield >= 0.004 {
+                // 后台预排相邻章节时也让主线程及时处理滚动和屏幕刷新。
+                try await Task.sleep(nanoseconds: 1_000_000)
+                lastLayoutYield = CACurrentMediaTime()
+            }
             let textLine = TextLine()
             textLine.isTitle = isTitle
             
@@ -527,25 +530,19 @@ class TextChapterLayout {
         }
         
         let result = textMeasure!.measureTextSplit(text: text)
-        let indentSize = ReadBookConfig.paragraphIndent.length
-        
         let zhLayout = ZhLayout(
-            text: text,
-            font: font,
-            width: width,
             words: result.strings,
             widths: result.widths.map { $0 + ChapterProvider.shared.letterSpacing },
-            indentSize: indentSize
+            width: width
         )
         
         var lines: [TextLayoutLine] = []
+        let characters = Array(text)
         for i in 0..<zhLayout.count {
             let start = zhLayout.getLineStart(i)
             let end = zhLayout.getLineEnd(i)
             
-            let startIndex = text.index(text.startIndex, offsetBy: start)
-            let endIndex = text.index(text.startIndex, offsetBy: end)
-            let lineText = String(text[startIndex..<endIndex])
+            let lineText = String(characters[start..<end])
             
             lines.append(TextLayoutLine(
                 text: lineText,

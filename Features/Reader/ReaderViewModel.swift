@@ -23,9 +23,10 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
         } else if readBook.curTextChapter != nil {
             errorMessage = nil
         }
-        curTextChapter = readBook.curTextChapter
-        prevTextChapter = readBook.prevTextChapter
-        nextTextChapter = readBook.nextTextChapter
+        let chapterChanged = curTextChapter !== readBook.curTextChapter
+        if chapterChanged { curTextChapter = readBook.curTextChapter }
+        if prevTextChapter !== readBook.prevTextChapter { prevTextChapter = readBook.prevTextChapter }
+        if nextTextChapter !== readBook.nextTextChapter { nextTextChapter = readBook.nextTextChapter }
         
         if let textChapter = curTextChapter {
             let pages = textChapter.pages
@@ -37,7 +38,7 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
                 currentPageIndex = min(max(0, readBook.durChapterPos), pages.count - 1)
                 isSynchronizingProgress = false
                 durChapterPos = Int32(clamping: currentPageIndex)
-                chapterContent = textChapter.getContent()
+                if chapterChanged { chapterContent = textChapter.getContent() }
             }
         } else {
             totalPages = 0
@@ -109,6 +110,10 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     @Published var pagePadding: EdgeInsets = EdgeInsets(top: 20, leading: 16, bottom: 20, trailing: 16) {
         didSet {
             UserDefaults.standard.set(Double(pagePadding.leading), forKey: "reader.pageMargin")
+            UserDefaults.standard.set(Double(pagePadding.leading), forKey: "readerPaddingLeft")
+            UserDefaults.standard.set(Double(pagePadding.trailing), forKey: "readerPaddingRight")
+            UserDefaults.standard.set(Double(pagePadding.top), forKey: "readerPaddingTop")
+            UserDefaults.standard.set(Double(pagePadding.bottom), forKey: "readerPaddingBottom")
         }
     }
     @Published var backgroundColor: Color = .white
@@ -190,11 +195,15 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
             lineSpacing = CGFloat(storedLineSpacing)
         }
 
-        let storedMargin = defaults.double(forKey: "reader.pageMargin")
-        if storedMargin > 0 {
-            let margin = CGFloat(storedMargin)
-            pagePadding = EdgeInsets(top: 20, leading: margin, bottom: 20, trailing: margin)
+        let storedMargin = defaults.object(forKey: "reader.pageMargin") as? Double ?? 16
+        func padding(_ key: String, fallback: Double) -> CGFloat {
+            let value = defaults.object(forKey: key) as? Double ?? fallback
+            return CGFloat(value.isFinite ? min(64, max(0, value)) : fallback)
         }
+        pagePadding = EdgeInsets(top: padding("readerPaddingTop", fallback: 20),
+                                 leading: padding("readerPaddingLeft", fallback: storedMargin),
+                                 bottom: padding("readerPaddingBottom", fallback: 20),
+                                 trailing: padding("readerPaddingRight", fallback: storedMargin))
 
         if let storedTheme = defaults.string(forKey: "reader.theme") {
             applyTheme(themeFromStorage(storedTheme))
