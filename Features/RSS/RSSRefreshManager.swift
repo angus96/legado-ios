@@ -135,7 +135,7 @@ final class RSSRefreshManager: NSObject {
 
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: tickInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.enqueueRefreshCheck(force: false) }
+            Task { @MainActor [weak self] in self?.enqueueRefreshCheck(force: false) }
         }
         timer?.tolerance = min(60, tickInterval * 0.2)
     }
