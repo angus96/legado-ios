@@ -24,6 +24,15 @@ final class LegadoUITests: XCTestCase {
         let nextPage = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label != %@ AND label CONTAINS %@", firstPage, "正文"), object: canvas)
         wait(for: [nextPage], timeout: 10)
         canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let theme = app.buttons["reader.theme"]
+        XCTAssertTrue(theme.waitForExistence(timeout: 10))
+        theme.tap()
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let darkReader = XCTAttachment(screenshot: app.screenshot())
+        darkReader.name = "阅读页暗色主题"
+        darkReader.lifetime = .keepAlways
+        add(darkReader)
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let change = app.buttons["reader.changeSource"]
         XCTAssertTrue(change.waitForExistence(timeout: 10))
         change.tap()

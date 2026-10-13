@@ -264,7 +264,7 @@ struct ReaderView: View {
     }
 
     private func toggleNightMode() {
-        isNightMode.toggle()
+        isNightMode = viewModel.theme != .dark
         viewModel.applyTheme(isNightMode ? .dark : .light)
     }
 }

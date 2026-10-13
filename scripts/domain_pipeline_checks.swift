@@ -77,6 +77,7 @@ if let path = savedCache.1 {
     check(FileManager.default.fileExists(atPath: ChapterContentLoader.cacheURL(path).path), "chapter cache exists on disk")
     try? FileManager.default.removeItem(at: ChapterContentLoader.cacheURL(path))
 }
+let progressBeforeRefresh = try ManagedObjectAccess.read(book) { ($0.durChapterIndex, $0.durChapterPos, $0.durChapterTitle) }
 try await ManagedObjectAccess.update(book) { book in
     book.durChapterIndex = 0; book.durChapterTitle = chapters[0].title; book.durChapterPos = 3
     try book.managedObjectContext?.save()
@@ -85,6 +86,13 @@ try await ChapterDirectoryUpdater.replace(book: book, source: source, original: 
                                           metadata: candidate, definition: snapshot, chapters: chapters)
 check(try ManagedObjectAccess.read(book) { $0.durChapterPos } == 3,
       "refreshing the same source preserves the current page")
+try await ManagedObjectAccess.update(book) { book in
+    book.durChapterIndex = progressBeforeRefresh.0
+    book.durChapterPos = progressBeforeRefresh.1
+    book.durChapterTitle = progressBeforeRefresh.2
+    try book.managedObjectContext?.save()
+}
+
 
 do {
     try await ChapterDirectoryUpdater.replace(book: book, source: source, original: candidate,

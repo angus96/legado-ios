@@ -213,6 +213,8 @@ struct ReadMenu: View {
                 icon: isNightMode ? "sun.max.fill" : "moon.fill",
                 action: onToggleNight
             )
+            .accessibilityIdentifier("reader.theme")
+            .accessibilityLabel("切换日夜主题")
             Spacer()
         }
         .padding(.horizontal, 16)
