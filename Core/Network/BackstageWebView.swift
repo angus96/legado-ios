@@ -54,7 +54,6 @@ private class WebViewPool {
 
         // 清理状态
         webView.stopLoading()
-        webView.loadHTMLString("", baseURL: nil)
 
         if let index = pool.firstIndex(where: { $0.webView === webView }) {
             pool[index].isAvailable = true
@@ -333,11 +332,19 @@ private class WebViewHandler: NSObject, WKNavigationDelegate {
     }
 
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        Task { @MainActor in self.finishWithError(error) }
+        Task { @MainActor in self.handleNavigationError(error) }
     }
 
     nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        Task { @MainActor in self.finishWithError(error) }
+        Task { @MainActor in self.handleNavigationError(error) }
+    }
+
+    private func handleNavigationError(_ error: Error) {
+        let error = error as NSError
+        // WebKit cancels replaced navigations, including callbacks delivered after pool reuse.
+        // User cancellation is completed explicitly by the task cancellation handler.
+        if error.domain == NSURLErrorDomain && error.code == URLError.cancelled.rawValue { return }
+        finishWithError(error)
     }
 
     // MARK: - 资源嗅探（sourceRegex）
@@ -394,9 +401,9 @@ private class WebViewHandler: NSObject, WKNavigationDelegate {
             }
 
             // 有结果，构建 StrResponse
-            let content = Self.unescapeJSON(resultStr)
             let finalURL = webView.url?.absoluteString ?? self.url ?? ""
-            self.finishWithResult(url: finalURL, body: content)
+            // WKWebView already returns decoded values; preserve quotes and literal escapes.
+            self.finishWithResult(url: finalURL, body: resultStr)
         }
     }
 
@@ -471,23 +478,6 @@ private class WebViewHandler: NSObject, WKNavigationDelegate {
            let data = try? JSONSerialization.data(withJSONObject: result as Any),
            let str = String(data: data, encoding: .utf8) { return str }
         return nil
-    }
-
-    /// 反转义 JSON 字符串并去掉首尾引号（对应 Android StringEscapeUtils.unescapeJson + quoteRegex）
-    private static func unescapeJSON(_ str: String) -> String {
-        var result = str
-        // 去掉首尾引号
-        if result.hasPrefix("\"") && result.hasSuffix("\"") && result.count >= 2 {
-            result = String(result.dropFirst().dropLast())
-        }
-        // 反转义常见 JSON 转义
-        result = result.replacingOccurrences(of: "\\\"", with: "\"")
-        result = result.replacingOccurrences(of: "\\n", with: "\n")
-        result = result.replacingOccurrences(of: "\\r", with: "\r")
-        result = result.replacingOccurrences(of: "\\t", with: "\t")
-        result = result.replacingOccurrences(of: "\\\\", with: "\\")
-        result = result.replacingOccurrences(of: "\\/", with: "/")
-        return result
     }
 
     private static let maxRetry = 30

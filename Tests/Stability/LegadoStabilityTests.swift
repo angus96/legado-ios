@@ -56,6 +56,17 @@ final class LegadoStabilityTests: XCTestCase {
         let next = try await BackstageWebView(html: "<html><body>继续</body></html>",
                                               javaScript: "document.body.textContent", timeout: 5000).getStrResponse()
         XCTAssertEqual(next.body, "继续")
+        for index in 0..<8 {
+            let expected = "复用请求\(index)"
+            let response = try await BackstageWebView(html: "<html><body>\(expected)</body></html>",
+                                                       javaScript: "document.body.textContent", timeout: 5000).getStrResponse()
+            XCTAssertEqual(response.body, expected, "旧页面或取消回调不能影响后续请求")
+        }
+        let quoted = #""正文\n\t\\\"保持原样""#
+        let injected = try await BackstageWebView(html: "<html><body>注入</body></html>",
+                                                  javaScript: "window.result", timeout: 5000,
+                                                  result: quoted).getStrResponse()
+        XCTAssertEqual(injected.body, quoted, "WKWebView 已解码的字符串不能再次反转义")
     }
 
     @MainActor
@@ -72,8 +83,14 @@ final class LegadoStabilityTests: XCTestCase {
         let (book, source) = try await context.perform { () -> (Book, BookSource) in
             let book = Book.create(in: context)
             book.name = UUID().uuidString
+            book.author = "测试作者"
+            book.bookUrl = base + "/book"
+            book.tocUrl = base + "/toc"
+            book.origin = base
+            book.originName = "图片测试源"
             let source = BookSource.create(in: context)
             source.bookSourceUrl = base
+            source.bookSourceName = "图片测试源"
             source.header = "{\"X-Legado-Test\":\"image-cache\"}"
             try context.save()
             return (book, source)
