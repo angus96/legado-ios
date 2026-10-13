@@ -4,6 +4,7 @@ import UIKit
 struct ReadViewWrapper: UIViewRepresentable {
     @ObservedObject var viewModel: ReaderViewModel
     let onTap: () -> Void
+    @AppStorage("pageAnimation") private var pageAnimationRaw = PageAnimationType.cover.rawValue
     
     func makeUIView(context: Context) -> ReadView {
         let readView = ReadView()
@@ -37,9 +38,7 @@ struct ReadViewWrapper: UIViewRepresentable {
     }
     
     private func updatePageDelegate(for readView: ReadView, coordinator: Coordinator) {
-        let book = viewModel.currentBook
-        let pageAnimValue = book?.isDeleted == false ? (book?.pageAnim ?? 0) : 0
-        let animationType = PageAnimationType(rawValue: pageAnimValue) ?? .cover
+        let animationType = PageAnimationType(rawValue: pageAnimationRaw) ?? .cover
         if coordinator.animationType == animationType, readView.pageDelegate != nil { return }
         coordinator.animationType = animationType
         readView.pageDelegate?.onDestroy()

@@ -17,7 +17,26 @@ enum ChapterContentLoader {
         if chapterData.0, let path = chapterData.1,
            let content = try? String(contentsOf: cacheURL(path), encoding: .utf8) { return content }
         guard let source = try BookSourceResolver.resolve(for: book) else { throw ManagedObjectAccessError.unavailable }
-        return try await WebBook.getContent(source: source, book: book, chapter: chapter)
+        let original = try BookRequestSnapshot.capture(book)
+        let details = try ManagedObjectAccess.read(chapter) { ($0.chapterId, $0.chapterUrl) }
+        let content = try await WebBook.getContent(source: source, book: book, chapter: chapter)
+        try Task.checkCancellation()
+        // 正常阅读取得的章节也写入统一缓存，离线重开时可以继续阅读。
+        let fileName = "\(details.0.uuidString).txt"
+        let file = cacheURL(fileName)
+        do {
+            try await ManagedObjectAccess.update(chapter) { chapter in
+                guard let currentBook = chapter.book, currentBook.origin == original.origin,
+                      currentBook.bookUrl == original.bookUrl, chapter.chapterUrl == details.1 else { throw CancellationError() }
+                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try content.write(to: file, atomically: true, encoding: .utf8)
+                chapter.isCached = true
+                chapter.cachePath = fileName
+                try chapter.managedObjectContext?.save()
+            }
+        } catch is CancellationError { throw CancellationError() }
+        catch { DebugLogger.shared.log("正文已取得，但缓存保存失败：\(error.localizedDescription)") }
+        return content
     }
 
     static func cache(chapter: BookChapter, book: Book) async throws {

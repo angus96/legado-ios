@@ -211,6 +211,9 @@ class ReadBook: ObservableObject {
     private func getChapterContent(chapter: BookChapter, book: Book) async throws -> [String] {
         let content = try await ChapterContentLoader.load(chapter: chapter, book: book)
         try Task.checkCancellation()
+        if UserDefaults.standard.object(forKey: "reader.useReplace") as? Bool == false {
+            return content.components(separatedBy: .newlines).filter { !$0.isEmpty }
+        }
         let replaced = ReplaceEngineEnhanced.shared.applyForReader(text: content, bookId: book.bookId,
                                                                    chapterId: chapter.chapterId,
                                                                    context: book.managedObjectContext ?? CoreDataStack.shared.viewContext)

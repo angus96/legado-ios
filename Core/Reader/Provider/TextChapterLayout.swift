@@ -493,7 +493,7 @@ class TextChapterLayout {
             textMeasure = TextMeasure(font: font)
         }
         let result = textMeasure!.measureTextSplit(text: text)
-        return result.widths
+        return result.widths.map { $0 + ChapterProvider.shared.letterSpacing }
     }
     
     private func measureTextSplit(_ text: String, widthsArray: [CGFloat], start: Int = 0) -> ([String], [CGFloat]) {
@@ -501,7 +501,7 @@ class TextChapterLayout {
             textMeasure = TextMeasure(font: ChapterProvider.shared.contentFont)
         }
         let result = textMeasure!.measureTextSplit(text: text)
-        return (result.strings, result.widths)
+        return (result.strings, result.widths.map { $0 + ChapterProvider.shared.letterSpacing })
     }
     
     private func isZeroWidthChar(_ char: Character) -> Bool {
@@ -533,7 +533,7 @@ class TextChapterLayout {
             font: font,
             width: width,
             words: result.strings,
-            widths: result.widths,
+            widths: result.widths.map { $0 + ChapterProvider.shared.letterSpacing },
             indentSize: indentSize
         )
         

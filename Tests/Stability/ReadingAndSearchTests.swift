@@ -95,6 +95,34 @@ final class ReadingAndSearchTests: XCTestCase {
         return pixels
     }
 
+    func testEPUBChapterNavigationUpdatesTheDisplayedHTML() async throws {
+        let database = try container()
+        let context = database.viewContext
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let book = Book.create(in: context)
+        book.name = "EPUB 测试"; book.origin = "local"; book.bookUrl = directory.appendingPathComponent("sample.epub").path
+        book.type = 1; book.folderName = directory.path; book.totalChapterNum = 2
+        let chapters = try (0..<2).map { index -> BookChapter in
+            let file = "chapter\(index).html"
+            try "<html><body>EPUB 第\(index)章正文</body></html>".write(to: directory.appendingPathComponent(file), atomically: true, encoding: .utf8)
+            let chapter = BookChapter.create(in: context, bookId: book.bookId, url: file, index: Int32(index), title: "第\(index)章")
+            chapter.book = book; chapter.cachePath = file
+            return chapter
+        }
+        try context.save()
+        let model = ReaderViewModel()
+        model.currentBook = book; model.chapters = chapters; model.totalChapters = 2
+        try await model.loadChapter(at: 0)
+        XCTAssertEqual(model.chapterHTMLURL?.lastPathComponent, "chapter0.html")
+        await model.nextChapter()
+        XCTAssertEqual(model.chapterHTMLURL?.lastPathComponent, "chapter1.html")
+        XCTAssertTrue(model.chapterContent?.contains("第1章正文") == true)
+        await model.prevChapter()
+        XCTAssertEqual(model.chapterHTMLURL?.lastPathComponent, "chapter0.html")
+    }
+
     func testPageGraphIsReleased() {
         weak var releasedChapter: TextChapter?
         weak var releasedPage: TextPage?

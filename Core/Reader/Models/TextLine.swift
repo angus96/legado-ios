@@ -111,7 +111,8 @@ class TextLine {
         
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: textColor
+            .foregroundColor: textColor,
+            .kern: provider.letterSpacing
         ]
         
         let attributedString = NSAttributedString(string: text, attributes: attributes)

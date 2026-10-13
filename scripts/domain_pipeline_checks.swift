@@ -68,6 +68,24 @@ check(resolved?.objectID == source.objectID, "reader resolves a source after its
 let chapter = try context.performAndWait { try context.fetch(BookChapter.fetchRequest()).first { $0.index == 0 }! }
 let content = try await WebBook.getContent(source: snapshot, book: book, chapter: chapter)
 check(content.contains("第一章测试内容"), "reading content works after switching source")
+
+let loadedContent = try await ChapterContentLoader.load(chapter: chapter, book: book)
+let savedCache = try ManagedObjectAccess.read(chapter) { ($0.isCached, $0.cachePath) }
+check(loadedContent.contains("第一章测试内容") && savedCache.0 && savedCache.1 != nil,
+      "normal reading saves chapter content for offline reopening")
+if let path = savedCache.1 {
+    check(FileManager.default.fileExists(atPath: ChapterContentLoader.cacheURL(path).path), "chapter cache exists on disk")
+    try? FileManager.default.removeItem(at: ChapterContentLoader.cacheURL(path))
+}
+try await ManagedObjectAccess.update(book) { book in
+    book.durChapterIndex = 0; book.durChapterTitle = chapters[0].title; book.durChapterPos = 3
+    try book.managedObjectContext?.save()
+}
+try await ChapterDirectoryUpdater.replace(book: book, source: source, original: candidate,
+                                          metadata: candidate, definition: snapshot, chapters: chapters)
+check(try ManagedObjectAccess.read(book) { $0.durChapterPos } == 3,
+      "refreshing the same source preserves the current page")
+
 do {
     try await ChapterDirectoryUpdater.replace(book: book, source: source, original: candidate,
                                               metadata: candidate, definition: snapshot, chapters: [])

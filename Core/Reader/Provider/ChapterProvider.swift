@@ -47,6 +47,7 @@ class ChapterProvider {
     // MARK: - 间距
     var lineSpacingExtra: CGFloat = 1.2
     var paragraphSpacing: CGFloat = 10
+    var letterSpacing: CGFloat = 0
     var titleTopSpacing: CGFloat = 30
     var titleBottomSpacing: CGFloat = 20
     
@@ -139,7 +140,7 @@ class ChapterProvider {
         guard !text.isEmpty, width > 0 else { return [] }
         let attributedString = NSAttributedString(
             string: text,
-            attributes: [.font: font]
+            attributes: [.font: font, .kern: letterSpacing]
         )
         
         let textStorage = NSTextStorage(attributedString: attributedString)

@@ -118,7 +118,12 @@ struct BookDetailView: View {
             }
         }
         .sheet(isPresented: $showingChapterList) {
-            ChapterListView(viewModel: ReaderViewModel(), book: book)
+            ChapterListView(viewModel: ReaderViewModel(), book: book) { chapter in
+                book.durChapterIndex = chapter.index
+                book.durChapterPos = 0
+                book.durChapterTitle = chapter.title
+                if viewModel.startReading() { navigatingToReader = true }
+            }
         }
         .sheet(isPresented: $showingSourceSelection) {
             ChangeSourceSheet(isPresented: $showingSourceSelection, book: book) {

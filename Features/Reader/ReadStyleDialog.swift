@@ -101,6 +101,8 @@ struct ReadStyleDialog: View {
                 .padding(.bottom, 16)
         }
         .background(Color(.systemBackground))
+        .onChange(of: textBold) { _ in viewModel.upPageAnim() }
+        .onChange(of: paragraphIndentRaw) { _ in viewModel.upPageAnim() }
         .sheet(isPresented: $showingPaddingConfig) {
             PaddingConfigDialog(isPresented: $showingPaddingConfig)
                 .presentationDetentsIfAvailable([.medium])

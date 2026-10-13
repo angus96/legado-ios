@@ -133,6 +133,10 @@ struct MoreConfigDialog: View {
                     Toggle("去除H标题", isOn: $delHTag)
                 }
             }
+            .onChange(of: useReplace) { _ in
+                viewModel.useReplaceRule = useReplace
+                ReadBook.shared.loadContent(resetPageOffset: false, forceRebuild: true)
+            }
             .navigationTitle("更多设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

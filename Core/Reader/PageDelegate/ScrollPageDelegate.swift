@@ -11,6 +11,12 @@ class ScrollPageDelegate: PageDelegate {
     private var nextImage: UIImage?
     private weak var renderedPage: TextPage?
 
+    func invalidateImages() {
+        currentImage = nil
+        previousImage = nil
+        nextImage = nil
+    }
+
     override func setBitmap() {
         currentImage = curPage.screenshot()
         previousImage = prevPage.screenshot()

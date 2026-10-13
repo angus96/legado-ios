@@ -82,10 +82,12 @@ class ChangeSourceViewModel: ObservableObject {
         var completedCount = 0
         
         // 搜索与换源共用实际的并发限制。
-        await ConcurrentSourceSearch.run(searchInputs) { item -> ChangeSourceResult? in
+        await ConcurrentSourceSearch.run(searchInputs, limit: 12) { item -> ChangeSourceResult? in
             let (source, definition) = item
             do {
-                let searchResults = try await WebBook.searchBook(source: definition, key: bookName)
+                let searchResults = try await ConcurrentSourceSearch.withTimeout(seconds: 12) {
+                    try await WebBook.searchBook(source: definition, key: bookName, timeout: 12)
+                }
                 let matched = searchResults.first { searchBook in
                     searchBook.name == bookName &&
                     (bookAuthor.isEmpty || searchBook.author == bookAuthor)

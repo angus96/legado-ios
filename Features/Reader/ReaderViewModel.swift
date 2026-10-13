@@ -51,6 +51,7 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     }
     
     func upPageAnim() {
+        objectWillChange.send()
     }
     
     // MARK: - ReadViewCallBack 协议实现
@@ -115,8 +116,12 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     @Published var imageStyle: ImageStyle = .original
     
     // MARK: - 新增阅读设置
-    @Published var paragraphSpacing: CGFloat = 12
-    @Published var letterSpacing: CGFloat = 0
+    @Published var paragraphSpacing: CGFloat = 12 {
+        didSet { UserDefaults.standard.set(Double(paragraphSpacing), forKey: "reader.paragraphSpacing") }
+    }
+    @Published var letterSpacing: CGFloat = 0 {
+        didSet { UserDefaults.standard.set(Double(letterSpacing), forKey: "reader.letterSpacing") }
+    }
     
     // MARK: - 私有属性
     private var ruleEngine: RuleEngine = RuleEngine()
@@ -132,16 +137,24 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
         let lineSpacing: CGFloat
         let paragraphSpacing: CGFloat
         let padding: EdgeInsets
+        let letterSpacing: CGFloat
+        let bold: Bool
+        let indent: Int
     }
 
     func configureTextLayout(size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
+        let bold = UserDefaults.standard.bool(forKey: "textBold")
+        let indent = UserDefaults.standard.object(forKey: "paragraphIndentRaw") as? Int ?? 2
+        ReadBookConfig.paragraphIndent = ParagraphIndent(rawValue: indent) ?? .two
         let metrics = LayoutMetrics(size: size, fontSize: fontSize, lineSpacing: lineSpacing,
-                                    paragraphSpacing: paragraphSpacing, padding: pagePadding)
+                                    paragraphSpacing: paragraphSpacing, padding: pagePadding,
+                                    letterSpacing: letterSpacing, bold: bold, indent: indent)
         let changed = layoutMetrics != nil && layoutMetrics != metrics
         layoutMetrics = metrics
         let provider = ChapterProvider.shared
-        let font = UIFont.systemFont(ofSize: fontSize)
+        let font = UIFont.systemFont(ofSize: fontSize, weight: bold ? .bold : .regular)
+        provider.letterSpacing = letterSpacing
         provider.updateStyle(titleFont: .systemFont(ofSize: fontSize + 2, weight: .bold),
                              contentFont: font, textColor: UIColor(textColor),
                              lineSpacing: 1 + lineSpacing / font.lineHeight,
@@ -163,6 +176,8 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     }
 
     private func loadReaderPreferences() {
+        paragraphSpacing = UserDefaults.standard.object(forKey: "reader.paragraphSpacing") as? Double ?? 12
+        letterSpacing = UserDefaults.standard.object(forKey: "reader.letterSpacing") as? Double ?? 0
         let defaults = UserDefaults.standard
 
         let storedFontSize = defaults.double(forKey: "reader.fontSize")
@@ -330,11 +345,13 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
 
                 let original = try BookRequestSnapshot.capture(book)
                 let definition = try BookSourceSnapshot.capture(source)
-                let webChapters = try await WebBook.getChapterList(source: definition, book: original)
+                let metadata = original.tocUrl.isEmpty
+                    ? try await WebBook.getBookInfo(source: definition, book: original) : original
+                let webChapters = try await WebBook.getChapterList(source: definition, book: metadata)
                 try Task.checkCancellation()
                 guard !webChapters.isEmpty else { throw ReaderError.noChapters }
                 try await ChapterDirectoryUpdater.replace(book: book, source: source, original: original,
-                                                          metadata: original, definition: definition, chapters: webChapters)
+                                                          metadata: metadata, definition: definition, chapters: webChapters)
 
                 chapters = try context.fetch(request)
             }
@@ -455,6 +472,11 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     // MARK: - 章节导航
     func prevChapter() async {
         guard currentChapterIndex > 0 else { return }
+        if currentBook?.isHardcover == true {
+            try? await loadChapter(at: currentChapterIndex - 1)
+            saveProgress()
+            return
+        }
         readBook.moveToPrevChapter(true, upContentInPlace: false)
         currentChapterIndex = readBook.durChapterIndex
         currentChapter = chapters[safe: currentChapterIndex]
@@ -463,6 +485,11 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     
     func nextChapter() async {
         guard currentChapterIndex < totalChapters - 1 else { return }
+        if currentBook?.isHardcover == true {
+            try? await loadChapter(at: currentChapterIndex + 1)
+            saveProgress()
+            return
+        }
         readBook.moveToNextChapter(true, false)
         currentChapterIndex = readBook.durChapterIndex
         currentChapter = chapters[safe: currentChapterIndex]
@@ -472,6 +499,10 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     func jumpToChapter(_ index: Int) {
         guard index >= 0 && index < totalChapters else { return }
         
+        if currentBook?.isHardcover == true {
+            Task { try? await loadChapter(at: index); saveProgress() }
+            return
+        }
         readBook.durChapterIndex = index
         readBook.durChapterPos = 0
         readBook.clearTextChapter()

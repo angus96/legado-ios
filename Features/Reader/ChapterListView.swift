@@ -4,6 +4,7 @@ import CoreData
 struct ChapterListView: View {
     @ObservedObject var viewModel: ReaderViewModel
     let book: Book
+    var onSelectChapter: ((BookChapter) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var chapters: [BookChapter] = []
     @State private var isLoading = false
@@ -72,7 +73,8 @@ struct ChapterListView: View {
                 List {
                     ForEach(filteredChapters, id: \.chapterId) { chapter in
                         Button(action: {
-                            viewModel.jumpToChapter(Int(chapter.index))
+                            if let onSelectChapter { onSelectChapter(chapter) }
+                            else { viewModel.jumpToChapter(Int(chapter.index)) }
                             dismiss()
                         }) {
                             HStack {

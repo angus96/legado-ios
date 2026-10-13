@@ -374,12 +374,13 @@ class ReadView: UIView, ReadViewProtocol {
     }
     
     func upContent() {
-        curPage.textPage = pageFactory?.curPage
-        prevPage.textPage = pageFactory?.prevPage
-        nextPage.textPage = pageFactory?.nextPage
+        (curPage as? ContentTextView)?.setPage(pageFactory?.curPage)
+        (prevPage as? ContentTextView)?.setPage(pageFactory?.prevPage)
+        (nextPage as? ContentTextView)?.setPage(pageFactory?.nextPage)
         (curPage as? UIView)?.setNeedsDisplay()
         (prevPage as? UIView)?.setNeedsDisplay()
         (nextPage as? UIView)?.setNeedsDisplay()
+        (pageDelegate as? ScrollPageDelegate)?.invalidateImages()
         accessibilityLabel = curPage.textPage?.text
         isAccessibilityElement = true
         setNeedsDisplay()
