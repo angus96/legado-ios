@@ -8,6 +8,7 @@ struct BookshelfView: View {
     @State private var showingSearch = false
     @State private var showingAddMenu = false
     @State private var showingLayoutConfig = false
+    @State private var cachingBook: Book?
     @State private var selectedGroupId: Int64?
     
     var body: some View {
@@ -72,6 +73,9 @@ struct BookshelfView: View {
         }
         .sheet(isPresented: $showingLayoutConfig) {
             BookshelfConfigSheet(viewModel: viewModel)
+        }
+        .sheet(item: $cachingBook) { book in
+            ChapterCacheView(book: book)
         }
         .task {
             await viewModel.loadBooks()
@@ -368,6 +372,11 @@ struct BookshelfView: View {
         NavigationLink(destination: BookDetailView(book: book)) {
             Label("书籍详情", systemImage: "info.circle")
         }
+
+        Button { cachingBook = book } label: {
+            Label("缓存章节", systemImage: "arrow.down.circle")
+        }
+        .disabled(book.isLocal)
         
         Divider()
         

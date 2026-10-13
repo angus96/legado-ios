@@ -19,6 +19,10 @@ enum StabilityTestBootstrap {
             source["bookSourceUrl"] = base + "/" + kind
             source["bookSourceName"] = kind == "current" ? "测试原书源" : (kind == "alternate" ? "测试新书源" : "测试缺字段书源")
             source["searchUrl"] = base + (kind == "missing" ? "/search-missing" : "/search")
+            if kind != "missing" {
+                source["enabledExplore"] = true
+                source["exploreUrl"] = "测试分类::" + base + "/explore"
+            }
             return source
         }
         let payload: [String: Any] = ["sources": sources, "books": [[

@@ -5,6 +5,7 @@ import UIKit
 struct BookDetailView: View {
     @StateObject private var viewModel: BookDetailViewModel
     @State private var showingChapterList = false
+    @State private var showingChapterCache = false
     @State private var showingSourceSelection = false
     @State private var navigatingToReader = false
     @State private var showingEditSheet = false
@@ -64,9 +65,10 @@ struct BookDetailView: View {
                     }
                     
                     Menu {
-                        Button(action: { viewModel.cacheAllChapters() }) {
-                            Label("缓存全本", systemImage: "arrow.down.circle")
+                        Button(action: { showingChapterCache = true }) {
+                            Label("缓存章节", systemImage: "arrow.down.circle")
                         }
+                        .disabled(book.isLocal)
                         
                         Button(action: { Task { await viewModel.refreshBookInfo() } }) {
                             Label("刷新书籍信息", systemImage: "arrow.clockwise")
@@ -126,6 +128,11 @@ struct BookDetailView: View {
                 book.durChapterTitle = chapter.title
                 if viewModel.startReading() { navigatingToReader = true }
             }
+        }
+        .sheet(isPresented: $showingChapterCache, onDismiss: {
+            Task { await viewModel.loadChapters() }
+        }) {
+            ChapterCacheView(book: book)
         }
         .sheet(isPresented: $showingSourceSelection) {
             ChangeSourceSheet(isPresented: $showingSourceSelection, book: book) {
@@ -530,28 +537,6 @@ class BookDetailViewModel: ObservableObject {
         }
     }
     
-    func cacheAllChapters() {
-        Task {
-            isLoading = true
-            defer { isLoading = false }
-            do {
-                let source = try resolveSource()
-                _ = try await refreshChapterList(source: source)
-                let request = BookChapter.fetchRequest(byBookId: book.bookId)
-                let chapters = try context.fetch(request)
-                for chapter in chapters {
-                    if !chapter.isCached {
-                        try await ChapterContentLoader.cache(chapter: chapter, book: book)
-                    }
-                }
-                try CoreDataStack.shared.save()
-                await loadChapters()
-            } catch {
-                DebugLogger.shared.log("缓存章节失败: \(error.localizedDescription)")
-            }
-        }
-    }
-    
     private func resolveSource() throws -> BookSource {
         guard let source = try BookSourceResolver.resolve(for: book) else { throw ReaderError.noSource }
         currentSource = source
@@ -568,17 +553,6 @@ class BookDetailViewModel: ObservableObject {
         return chapters.count
     }
 
-    private func cacheChapterToDisk(chapter: BookChapter, content: String) throws {
-        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("chapters", isDirectory: true)
-        if !FileManager.default.fileExists(atPath: dir.path) {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        }
-        let fileName = "\(chapter.bookId.uuidString)_\(chapter.index).txt"
-        try content.write(to: dir.appendingPathComponent(fileName), atomically: true, encoding: .utf8)
-        chapter.isCached = true
-        chapter.cachePath = fileName
-    }
-    
     func deleteBook(_ book: Book) {
         guard !book.isDeleted, book.managedObjectContext === context else { return }
         context.delete(book)

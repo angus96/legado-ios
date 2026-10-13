@@ -2,6 +2,64 @@ import XCTest
 
 final class LegadoUITests: XCTestCase {
     @MainActor
+    func testDiscoveryKeyboardCanBeDismissedWithoutClearingTheFilter() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["LEGADO_UI_TESTS"] = "1"
+        app.launchEnvironment["LEGADO_FIXTURE_URL"] = "http://127.0.0.1:8766"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["测试书籍"].firstMatch.waitForExistence(timeout: 15))
+        app.tabBars.buttons["发现"].tap()
+        let search = app.textFields["discovery.search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.tap()
+        search.typeText("test")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        app.buttons["discovery.dismissKeyboard"].tap()
+        let hidden = NSPredicate(format: "exists == false")
+        wait(for: [XCTNSPredicateExpectation(predicate: hidden, object: app.keyboards.firstMatch)], timeout: 5)
+        XCTAssertEqual(search.value as? String, "test")
+        search.tap()
+        search.typeText("\n")
+        wait(for: [XCTNSPredicateExpectation(predicate: hidden, object: app.keyboards.firstMatch)], timeout: 5)
+        app.buttons["清空搜索"].tap()
+        capture(app, name: "发现页收起键盘")
+    }
+
+    @MainActor
+    func testChapterCacheDefaultsToAllAndDownloadsSelectedChapters() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["LEGADO_UI_TESTS"] = "1"
+        app.launchEnvironment["LEGADO_FIXTURE_URL"] = "http://127.0.0.1:8766"
+        app.launchArguments = ["-com.apple.CoreData.ConcurrencyDebug", "1"]
+        app.launch()
+        let book = app.staticTexts["测试书籍"].firstMatch
+        XCTAssertTrue(book.waitForExistence(timeout: 15))
+        book.press(forDuration: 1)
+        app.buttons["缓存章节"].firstMatch.tap()
+        let selection = app.staticTexts["cache.selection"]
+        XCTAssertTrue(selection.waitForExistence(timeout: 15))
+        XCTAssertEqual(selection.label, "已选 4 / 共 4 章")
+        app.buttons["cache.chapter.1"].tap()
+        app.buttons["cache.chapter.4"].tap()
+        XCTAssertEqual(selection.label, "已选 2 / 共 4 章")
+        capture(app, name: "选择章节缓存")
+        app.buttons["cache.startStop"].tap()
+        let status = app.staticTexts["cache.status"]
+        let completed = NSPredicate(format: "label == %@", "缓存完成")
+        wait(for: [XCTNSPredicateExpectation(predicate: completed, object: status)], timeout: 20)
+        XCTAssertTrue(app.buttons["cache.chapter.2"].label.contains("已缓存"))
+        XCTAssertFalse(app.buttons["cache.chapter.1"].label.contains("已缓存"))
+        app.buttons["cache.selectAll"].tap()
+        app.buttons["cache.startStop"].tap()
+        wait(for: [XCTNSPredicateExpectation(predicate: completed, object: status)], timeout: 20)
+        XCTAssertTrue(app.staticTexts["所选章节中，已有 4 章可离线阅读"].waitForExistence(timeout: 20))
+        capture(app, name: "全本缓存完成")
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    @MainActor
     func testDeletingBookFromTheShelfKeepsTheAppRunning() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

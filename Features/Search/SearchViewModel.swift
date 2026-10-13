@@ -119,7 +119,7 @@ class SearchViewModel: ObservableObject {
                 } catch is CancellationError {
                     return (source, [], nil)
                 } catch {
-                    return (source, [], "\(source.bookSourceName)：\(error.localizedDescription)")
+                    return (source, [], "\(source.bookSourceName)：\(NetworkError.message(for: error))")
                 }
             } onResult: { source, results, error in
                 guard let self, self.searchID == requestID, !Task.isCancelled else { return }

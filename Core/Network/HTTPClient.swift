@@ -150,6 +150,28 @@ enum NetworkError: LocalizedError {
     case invalidResponse
     case httpError(statusCode: Int)
     case networkFailure(Error)
+
+    static func message(for error: Error) -> String {
+        if case NetworkError.networkFailure(let underlying) = error { return message(for: underlying) }
+        var detail = error as NSError
+        for _ in 0..<6 {
+            if detail.domain == NSURLErrorDomain {
+                switch URLError.Code(rawValue: detail.code) {
+                case .appTransportSecurityRequiresSecureConnection:
+                    return "系统阻止了此书源的 HTTP 连接（ATS）。"
+                case .secureConnectionFailed:
+                    return "安全连接失败（TLS）：网站的加密协议、证书或网络连接可能有问题，请重试或切换书源。"
+                case .serverCertificateHasBadDate, .serverCertificateUntrusted,
+                     .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid:
+                    return "网站的 HTTPS 证书未通过验证，请检查设备时间，或切换书源。"
+                default: break
+                }
+            }
+            guard let underlying = detail.userInfo[NSUnderlyingErrorKey] as? NSError else { break }
+            detail = underlying
+        }
+        return error.localizedDescription
+    }
     
     var errorDescription: String? {
         switch self {
@@ -160,7 +182,7 @@ enum NetworkError: LocalizedError {
         case .httpError(let statusCode):
             return "HTTP 错误：\(statusCode)"
         case .networkFailure(let error):
-            return "网络错误：\(error.localizedDescription)"
+            return "网络错误：\(Self.message(for: error))"
         }
     }
 }

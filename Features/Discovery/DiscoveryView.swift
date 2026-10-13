@@ -5,6 +5,7 @@ import JavaScriptCore
 struct DiscoveryView: View {
     @StateObject private var viewModel = DiscoveryViewModel()
     @State private var searchText = ""
+    @FocusState private var searchFocused: Bool
     
     var body: some View {
         VStack(spacing: 0) {
@@ -18,6 +19,7 @@ struct DiscoveryView: View {
         }
         .navigationTitle("发现")
         .navigationBarTitleDisplayMode(.inline)
+        .onDisappear { searchFocused = false }
         .task { await viewModel.loadExploreGroups() }
         .refreshable { await viewModel.refresh() }
         .sheet(item: $viewModel.selectedExplore) { selection in
@@ -34,6 +36,10 @@ struct DiscoveryView: View {
             
             TextField("搜索书源", text: $searchText)
                 .textFieldStyle(.plain)
+                .focused($searchFocused)
+                .submitLabel(.done)
+                .onSubmit { searchFocused = false }
+                .accessibilityIdentifier("discovery.search")
                 .onChange(of: searchText) { _ in
                     viewModel.filterGroups(keyword: searchText)
                 }
@@ -43,6 +49,11 @@ struct DiscoveryView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
+                .accessibilityLabel("清空搜索")
+            }
+            if searchFocused {
+                Button("完成") { searchFocused = false }
+                    .accessibilityIdentifier("discovery.dismissKeyboard")
             }
         }
         .padding(10)
@@ -68,17 +79,21 @@ struct DiscoveryView: View {
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture { searchFocused = false }
     }
     
     private var exploreList: some View {
         List {
             ForEach(viewModel.filteredGroups, id: \.sourceId) { group in
                 ExploreGroupRow(group: group) {
+                    searchFocused = false
                     viewModel.toggleGroup(group.sourceId)
                 }
                 
                 if viewModel.isExpanded(group.sourceId) {
                     ExploreKindFlexBox(group: group, kinds: group.exploreKinds) { kind in
+                        searchFocused = false
                         viewModel.openExplore(group: group, kind: kind)
                     }
                     .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 8, trailing: 8))
@@ -87,6 +102,7 @@ struct DiscoveryView: View {
             }
         }
         .listStyle(.plain)
+        .scrollDismissesKeyboard(.interactively)
     }
 }
 
@@ -441,6 +457,7 @@ final class ExploreResultsViewModel: ObservableObject {
 
     func load() async {
         isLoading = true
+        errorMessage = nil
         defer { isLoading = false }
 
         let context = CoreDataStack.shared.viewContext
@@ -459,7 +476,8 @@ final class ExploreResultsViewModel: ObservableObject {
             results = items
             hasMore = !items.isEmpty
         } catch {
-            errorMessage = error.localizedDescription
+            recordFailure(error)
+            errorMessage = NetworkError.message(for: error)
         }
     }
 
@@ -485,8 +503,20 @@ final class ExploreResultsViewModel: ObservableObject {
             currentPage = nextPage
             results.append(contentsOf: filtered)
         } catch {
+            recordFailure(error)
+            errorMessage = NetworkError.message(for: error)
             hasMore = false
         }
+    }
+
+    private func recordFailure(_ error: Error) {
+        let detail = error as NSError
+        let failingURL = (detail.userInfo[NSURLErrorFailingURLErrorKey] as? URL)?.absoluteString
+            ?? (detail.userInfo[NSURLErrorFailingURLStringErrorKey] as? String) ?? selection.url
+        var components = URLComponents(string: failingURL)
+        components?.user = nil; components?.password = nil
+        components?.query = nil; components?.fragment = nil
+        DebugLogger.shared.log("发现请求失败：书源=\(selection.sourceName)，ID=\(selection.sourceId)，分类=\(selection.kindTitle)，URL=\(components?.string ?? "未知")，\(detail.domain)(\(detail.code))，\(NetworkError.message(for: error))")
     }
 
     private func loadPage(page: Int, source: BookSource) async throws -> [SearchViewModel.SearchResult] {

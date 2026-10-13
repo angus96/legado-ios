@@ -79,6 +79,8 @@ jobs:
 
     - name: Run iOS Stability and UI Tests
       run: |
+        # 使用普通域名验证 ATS；localhost / 裸 IP 不足以覆盖此限制。
+        echo '127.0.0.1 legado-fixture.test' | sudo tee -a /etc/hosts > /dev/null
         python3 scripts/serve_stability_fixtures.py > "$RUNNER_TEMP/fixture-server.log" 2>&1 &
         FIXTURE_SERVER_PID=$!
         trap 'kill "$FIXTURE_SERVER_PID" || true' EXIT

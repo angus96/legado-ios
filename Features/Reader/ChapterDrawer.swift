@@ -136,6 +136,7 @@ private struct TOCPane: View {
     @State private var chapters: [BookChapter] = []
     @State private var searchText = ""
     @State private var sortAscending = true
+    @State private var showingCache = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -143,6 +144,11 @@ private struct TOCPane: View {
             chapterList
         }
         .task { await loadChapters() }
+        .sheet(isPresented: $showingCache, onDismiss: {
+            Task { await loadChapters() }
+        }) {
+            ChapterCacheView(book: book)
+        }
     }
 
     private var searchHeader: some View {
@@ -170,6 +176,14 @@ private struct TOCPane: View {
                     .cornerRadius(8)
             }
             .foregroundColor(.primary)
+
+            if !book.isLocal {
+                Button { showingCache = true } label: {
+                    Image(systemName: "arrow.down.circle")
+                        .frame(width: 32, height: 32)
+                }
+                .accessibilityLabel("缓存章节")
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
