@@ -1836,6 +1836,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.legado.LegadoStabilityTests;
+				PRODUCT_MODULE_NAME = LegadoStabilityTests;
+				PRODUCT_NAME = LegadoStabilityTests;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -1853,6 +1855,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.legado.LegadoStabilityTests;
+				PRODUCT_MODULE_NAME = LegadoStabilityTests;
+				PRODUCT_NAME = LegadoStabilityTests;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -1868,6 +1872,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.legado.LegadoUITests;
+				PRODUCT_MODULE_NAME = LegadoUITests;
+				PRODUCT_NAME = LegadoUITests;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -1884,6 +1890,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.legado.LegadoUITests;
+				PRODUCT_MODULE_NAME = LegadoUITests;
+				PRODUCT_NAME = LegadoUITests;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";

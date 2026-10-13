@@ -72,6 +72,8 @@ test_targets = [
   test_target.add_dependency(target) unless test_target.dependencies.any? { |dependency| dependency.target == target }
   test_target.build_configurations.each do |configuration|
     settings = configuration.build_settings
+    settings['PRODUCT_NAME'] = name
+    settings['PRODUCT_MODULE_NAME'] = name
     settings['PRODUCT_BUNDLE_IDENTIFIER'] = "com.legado.#{name}"
     settings['GENERATE_INFOPLIST_FILE'] = 'YES'
     settings['SWIFT_VERSION'] = '5.0'
