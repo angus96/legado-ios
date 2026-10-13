@@ -208,8 +208,9 @@ class QRCodeScanViewModel: NSObject, ObservableObject {
     }
     
     func startScanning() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.captureSession?.startRunning()
+        let session = captureSession
+        DispatchQueue.global(qos: .userInitiated).async {
+            session?.startRunning()
         }
     }
     

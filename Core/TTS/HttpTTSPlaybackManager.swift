@@ -104,7 +104,7 @@ actor HttpTTSPlaybackManager {
     private var stateHandler: StateChangeHandler?
     private var progressHandler: ProgressChangeHandler?
 
-    nonisolated init() {
+    init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120

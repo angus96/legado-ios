@@ -243,10 +243,12 @@ class AudioPlayManager: ObservableObject {
     private func addTimeObserver() {
         let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
         timeObserver = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+          Task { @MainActor in
             guard let self = self else { return }
             self.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
             let duration = self.player?.currentItem?.duration.seconds ?? 0
             self.duration = duration.isFinite ? max(0, duration) : 0
+          }
         }
     }
     

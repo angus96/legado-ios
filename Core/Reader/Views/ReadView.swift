@@ -2,6 +2,7 @@ import UIKit
 
 /// 阅读视图回调协议
 /// 一比一移植自 Android Legado ReadView.CallBack
+@MainActor
 protocol ReadViewCallBack: ReadBookCallBack {
     func showActionMenu()
     func hideActionMenu()

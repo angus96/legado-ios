@@ -16,7 +16,7 @@ struct BackupRestoreView: View {
     
     var body: some View {
         Form {
-            Section(header: Label("备份", systemImage: "square.and.arrow.up")) {
+            Section {
                 Button(action: { showingExport = true }) {
                     HStack {
                         Image(systemName: "square.and.arrow.up")
@@ -27,9 +27,13 @@ struct BackupRestoreView: View {
                 Button(action: viewModel.backupAll) {
                     HStack {
                         Image(systemName: "doc")
-                        Text("完整备份")
+                        Text("备份书架和规则")
                     }
                 }
+            } header: {
+                Label("备份", systemImage: "square.and.arrow.up")
+            } footer: {
+                Text("包含书架、书源规则、目录、书签和替换规则。正文缓存、本地书籍文件及 RSS 等设置需要另行保存。")
             }
             
             Section(header: Label("恢复", systemImage: "square.and.arrow.down")) {

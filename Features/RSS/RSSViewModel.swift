@@ -13,8 +13,8 @@ final class RSSViewModel: ObservableObject {
 
     private let refreshManager: RSSRefreshManager
 
-    init(refreshManager: RSSRefreshManager = .shared) {
-        self.refreshManager = refreshManager
+    init(refreshManager: RSSRefreshManager? = nil) {
+        self.refreshManager = refreshManager ?? .shared
         self.autoRefreshEnabled = refreshManager.autoRefreshEnabled
         self.refreshInterval = refreshManager.refreshInterval
     }

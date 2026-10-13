@@ -433,17 +433,19 @@ class VideoPlayerState: ObservableObject {
     private func setupTimeObserver(_ player: AVPlayer) {
         let interval = CMTime(seconds: 0.5, preferredTimescale: 1)
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+          Task { @MainActor in
             guard let self = self else { return }
-            self.currentTime = time.seconds
+            self.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
             if self.duration > 0 {
-                self.progress = time.seconds / self.duration
+                self.progress = self.currentTime / self.duration
             }
+          }
         }
     }
 
     private func setupNotifications(_ item: AVPlayerItem) {
         NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
-            self?.isPlaying = false
+            Task { @MainActor in self?.isPlaying = false }
         }
 
         item.publisher(for: \.status)
