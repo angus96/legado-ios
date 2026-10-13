@@ -9,12 +9,12 @@ struct ReadViewWrapper: UIViewRepresentable {
         let readView = ReadView()
         readView.callBack = context.coordinator
         readView.pageFactory = TextPageFactory(dataSource: ReadBook.shared)
-        updatePageDelegate(for: readView)
+        updatePageDelegate(for: readView, coordinator: context.coordinator)
         return readView
     }
     
     func updateUIView(_ uiView: ReadView, context: Context) {
-        updatePageDelegate(for: uiView)
+        updatePageDelegate(for: uiView, coordinator: context.coordinator)
         uiView.upContent()
     }
     
@@ -22,9 +22,11 @@ struct ReadViewWrapper: UIViewRepresentable {
         Coordinator(self)
     }
     
-    private func updatePageDelegate(for readView: ReadView) {
+    private func updatePageDelegate(for readView: ReadView, coordinator: Coordinator) {
         let pageAnimValue = viewModel.currentBook?.pageAnim ?? 0
         let animationType = PageAnimationType(rawValue: pageAnimValue) ?? .cover
+        if coordinator.animationType == animationType, readView.pageDelegate != nil { return }
+        coordinator.animationType = animationType
         readView.pageDelegate?.onDestroy()
         
         switch animationType {
@@ -43,6 +45,7 @@ struct ReadViewWrapper: UIViewRepresentable {
     
     class Coordinator: NSObject, ReadViewCallBack {
         let parent: ReadViewWrapper
+        var animationType: PageAnimationType?
         
         init(_ parent: ReadViewWrapper) {
             self.parent = parent

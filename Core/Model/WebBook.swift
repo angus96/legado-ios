@@ -46,10 +46,12 @@ class WebBook {
     
     /// 在指定书源中搜索书籍
     static func searchBook(
-        source: BookSource,
+        source: BookSourceDefinition,
         key: String,
         page: Int = 1
     ) async throws -> [SearchBookResult] {
+        try Task.checkCancellation()
+        let source = try BookSourceSnapshot.capture(source)
         guard let searchUrl = source.searchUrl, !searchUrl.isEmpty else {
             throw WebBookError.noSearchUrl
         }
@@ -121,10 +123,12 @@ class WebBook {
     }
 
     static func exploreBook(
-        source: BookSource,
+        source: BookSourceDefinition,
         url: String,
         page: Int = 1
     ) async throws -> [SearchBookResult] {
+        try Task.checkCancellation()
+        let source = try BookSourceSnapshot.capture(source)
         let analyzedUrl = AnalyzeUrl.analyze(
             ruleUrl: url,
             page: page,
@@ -175,17 +179,26 @@ class WebBook {
     // MARK: - 获取书籍详情
     
     /// 获取书籍详细信息
+    static func getBookInfo(source: BookSourceDefinition, book: Book) async throws {
+        let request = try BookRequestSnapshot.capture(book)
+        let metadata = try await getBookInfo(source: source, book: request)
+        try await metadata.applyInfo(to: book)
+    }
+
     static func getBookInfo(
-        source: BookSource,
-        book: Book
-    ) async throws {
+        source: BookSourceDefinition,
+        book: BookRequestSnapshot
+    ) async throws -> BookRequestSnapshot {
+        try Task.checkCancellation()
+        let source = try BookSourceSnapshot.capture(source)
+        var metadata = book
         guard let infoRule = source.getBookInfoRule() else {
             throw WebBookError.noRule("书籍信息规则")
         }
         
         // 1. 请求详情页
         let analyzedUrl = AnalyzeUrl.analyze(
-            ruleUrl: book.bookUrl,
+            ruleUrl: metadata.bookUrl,
             baseUrl: source.bookSourceUrl,
             source: source
         )
@@ -228,17 +241,17 @@ class WebBook {
         if let name = infoRule.name {
             let parsed = ruleEngine.getString(ruleStr: name, elementContext: elementCtx, baseUrl: redirectUrl)
             let normalized = normalizeBookName(parsed)
-            if !normalized.isEmpty, (canRename || book.name.isEmpty) { book.name = normalized }
+            if !normalized.isEmpty, (canRename || metadata.name.isEmpty) { metadata.name = normalized }
         }
         if let author = infoRule.author {
             let parsed = ruleEngine.getString(ruleStr: author, elementContext: elementCtx, baseUrl: redirectUrl)
             let normalized = normalizeBookAuthor(parsed)
-            if !normalized.isEmpty, (canRename || book.author.isEmpty) { book.author = normalized }
+            if !normalized.isEmpty, (canRename || metadata.author.isEmpty) { metadata.author = normalized }
         }
         if let kind = infoRule.kind {
             let parsed = ruleEngine.getString(ruleStr: kind, elementContext: elementCtx, baseUrl: redirectUrl)
             if !parsed.isEmpty {
-                book.kind = parsed
+                metadata.kind = parsed
                     .components(separatedBy: .newlines)
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
@@ -247,62 +260,72 @@ class WebBook {
         }
         if let intro = infoRule.intro {
             let parsed = ruleEngine.getString(ruleStr: intro, elementContext: elementCtx, baseUrl: redirectUrl)
-            if !parsed.isEmpty { book.intro = normalizeIntro(parsed) }
+            if !parsed.isEmpty { metadata.intro = normalizeIntro(parsed) }
         }
         if let coverUrl = infoRule.coverUrl {
             let parsed = ruleEngine.getString(ruleStr: coverUrl, elementContext: elementCtx, baseUrl: redirectUrl)
             if !parsed.isEmpty {
-                book.coverUrl = URL(string: parsed, relativeTo: URL(string: redirectUrl))?.absoluteURL.absoluteString ?? parsed
+                metadata.coverUrl = URL(string: parsed, relativeTo: URL(string: redirectUrl))?.absoluteURL.absoluteString ?? parsed
             }
         }
         if let tocUrl = infoRule.tocUrl {
             let parsed = ruleEngine.getString(ruleStr: tocUrl, elementContext: elementCtx, baseUrl: redirectUrl)
             if !parsed.isEmpty {
-                book.tocUrl = URL(string: parsed, relativeTo: URL(string: redirectUrl))?.absoluteURL.absoluteString ?? parsed
+                metadata.tocUrl = URL(string: parsed, relativeTo: URL(string: redirectUrl))?.absoluteURL.absoluteString ?? parsed
             }
         }
-        if book.tocUrl.isEmpty {
-            book.tocUrl = book.bookUrl
+        if metadata.tocUrl.isEmpty {
+            metadata.tocUrl = metadata.bookUrl
         }
-        if book.tocUrl == book.bookUrl {
-            book.tocHtml = body
+        if metadata.tocUrl == metadata.bookUrl {
+            metadata.tocHtml = body
         }
         if let lastChapter = infoRule.lastChapter {
             let parsed = ruleEngine.getString(ruleStr: lastChapter, elementContext: elementCtx, baseUrl: redirectUrl)
-            if !parsed.isEmpty { book.latestChapterTitle = parsed }
+            if !parsed.isEmpty { metadata.latestChapterTitle = parsed }
         }
         if let wordCount = infoRule.wordCount {
             let parsed = ruleEngine.getString(ruleStr: wordCount, elementContext: elementCtx, baseUrl: redirectUrl)
-            if !parsed.isEmpty { book.wordCount = formatWordCount(parsed) }
+            if !parsed.isEmpty { metadata.wordCount = formatWordCount(parsed) }
         }
         if let downloadUrlsRule = infoRule.downloadUrls,
            let parsed = try? ruleEngine.getStringList(ruleStr: downloadUrlsRule, body: body, baseUrl: redirectUrl, isUrl: true),
            !parsed.isEmpty {
-            book.downloadUrls = parsed.joined(separator: "\n")
+            metadata.downloadUrls = parsed.joined(separator: "\n")
         }
+        try Task.checkCancellation()
+        return metadata
     }
     
     // MARK: - 获取目录
     
     /// 获取书籍章节目录
+    static func getChapterList(source: BookSourceDefinition, book: Book) async throws -> [WebChapter] {
+        let request = try BookRequestSnapshot.capture(book)
+        return try await getChapterList(source: source, book: request)
+    }
+
     static func getChapterList(
-        source: BookSource,
-        book: Book
+        source: BookSourceDefinition,
+        book: BookRequestSnapshot
     ) async throws -> [WebChapter] {
+        try Task.checkCancellation()
+        let source = try BookSourceSnapshot.capture(source)
+        let metadata = book
         guard let tocRule = source.getTocRule() else {
             throw WebBookError.noRule("目录规则")
         }
         
-        let tocUrl = book.tocUrl.isEmpty ? book.bookUrl : book.tocUrl
+        let tocUrl = metadata.tocUrl.isEmpty ? metadata.bookUrl : metadata.tocUrl
 
         let body: String
         let redirectUrl: String
 
-        if tocUrl == book.bookUrl,
-           let cachedTocHtml = book.tocHtml,
+        if tocUrl == metadata.bookUrl,
+           let cachedTocHtml = metadata.tocHtml,
            !cachedTocHtml.isEmpty {
             body = cachedTocHtml
-            redirectUrl = book.bookUrl
+            redirectUrl = metadata.bookUrl
         } else {
             // 1. 请求目录页
             let analyzedUrl = AnalyzeUrl.analyze(
@@ -333,6 +356,7 @@ class WebBook {
         var visitedUrls: Set<String> = [redirectUrl]
 
         while !pendingPageUrls.isEmpty {
+            try Task.checkCancellation()
             let nextUrl = pendingPageUrls.removeFirst()
             guard !nextUrl.isEmpty, !visitedUrls.contains(nextUrl) else { continue }
 
@@ -375,31 +399,35 @@ class WebBook {
     
     /// 获取章节正文内容
     static func getContent(
-        source: BookSource,
+        source: BookSourceDefinition,
         book: Book,
         chapter: BookChapter
     ) async throws -> String {
+        try Task.checkCancellation()
+        let source = try BookSourceSnapshot.capture(source)
+        let metadata = try BookRequestSnapshot.capture(book)
+        let chapterURL = try ManagedObjectAccess.read(chapter) { $0.chapterUrl }
         guard let contentRule = source.getContentRule() else {
             throw WebBookError.noRule("正文规则")
         }
         
         guard let ruleStr = contentRule.content, !ruleStr.isEmpty else {
             // 如果没有正文规则，直接返回章节 URL（可能就是内容本身）
-            return chapter.chapterUrl
+            return chapterURL
         }
 
         let body: String
         let redirectUrl: String
 
-        if chapter.chapterUrl == book.bookUrl,
-           let cachedTocHtml = book.tocHtml,
+        if chapterURL == metadata.bookUrl,
+           let cachedTocHtml = metadata.tocHtml,
            !cachedTocHtml.isEmpty {
             body = cachedTocHtml
-            redirectUrl = book.bookUrl
+            redirectUrl = metadata.bookUrl
         } else {
             // 1. 请求正文页
             let analyzedUrl = AnalyzeUrl.analyze(
-                ruleUrl: chapter.chapterUrl,
+                ruleUrl: chapterURL,
                 baseUrl: source.bookSourceUrl,
                 source: source
             )
@@ -518,7 +546,7 @@ class WebBook {
     }
 
     private static func applyLoginCheckIfNeeded(
-        source: BookSource,
+        source: BookSourceDefinition,
         response: (body: String, url: String)
     ) -> (body: String, url: String) {
         guard let checkJs = source.loginCheckJs?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -527,7 +555,7 @@ class WebBook {
         }
 
         let executionContext = ExecutionContext()
-        executionContext.source = source
+        executionContext.source = try? BookSourceSnapshot.capture(source)
         executionContext.baseURL = URL(string: response.url)
         executionContext.variables["body"] = response.body
         executionContext.variables["url"] = response.url
@@ -589,7 +617,7 @@ class WebBook {
     
     /// 从 HTML/JSON 中解析书籍列表（搜索结果/发现列表通用）
     private static func parseBookList(
-        source: BookSource,
+        source: BookSourceDefinition,
         body: String,
         baseUrl: String,
         bookListRule: String?,
@@ -627,7 +655,8 @@ class WebBook {
             }
 
             let parsedBookUrl = ruleEngine.getString(ruleStr: bookUrlRule, elementContext: elementCtx, baseUrl: baseUrl)
-            book.bookUrl = parsedBookUrl.isEmpty ? baseUrl : parsedBookUrl
+            book.bookUrl = parsedBookUrl.isEmpty ? baseUrl :
+                (URL(string: parsedBookUrl, relativeTo: URL(string: baseUrl))?.absoluteURL.absoluteString ?? parsedBookUrl)
 
             let parsedCoverURL = ruleEngine.getString(ruleStr: coverUrlRule, elementContext: elementCtx, baseUrl: baseUrl)
             if !parsedCoverURL.isEmpty {
@@ -649,7 +678,7 @@ class WebBook {
     }
 
     private static func parseDetailPageAsSearchResult(
-        source: BookSource,
+        source: BookSourceDefinition,
         body: String,
         requestURL: String,
         redirectURL: String

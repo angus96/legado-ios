@@ -20,6 +20,7 @@ class AudioPlayManager: ObservableObject {
     private var player: AVPlayer?
     private var timeObserver: Any?
     private var ruleEngine = RuleEngine()
+    private var chapterLoadID = UUID()
     
     init() {
         setupAudioSession()
@@ -115,11 +116,16 @@ class AudioPlayManager: ObservableObject {
     }
     
     func loadChapter(_ chapter: BookChapter) async {
+        let requestID = UUID()
+        chapterLoadID = requestID
         currentChapter = chapter
         isLoading = true
         
         do {
             let audioURL = try await getAudioURL(for: chapter)
+            guard chapterLoadID == requestID, !Task.isCancelled else { return }
+            removeTimeObserver()
+            player?.pause()
             let playerItem = AVPlayerItem(url: audioURL)
             player = AVPlayer(playerItem: playerItem)
             addTimeObserver()
@@ -129,6 +135,7 @@ class AudioPlayManager: ObservableObject {
                 await seekTo(Double(book.durChapterPos))
             }
         } catch {
+            guard chapterLoadID == requestID else { return }
             errorMessage = "加载音频失败: \(error.localizedDescription)"
         }
         
@@ -237,8 +244,9 @@ class AudioPlayManager: ObservableObject {
         let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
         timeObserver = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self = self else { return }
-            self.currentTime = time.seconds
-            self.duration = self.player?.currentItem?.duration.seconds ?? 0
+            self.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
+            let duration = self.player?.currentItem?.duration.seconds ?? 0
+            self.duration = duration.isFinite ? max(0, duration) : 0
         }
     }
     
@@ -267,8 +275,8 @@ class AudioPlayManager: ObservableObject {
         guard let book = currentBook else { return }
         let context = CoreDataStack.shared.viewContext
         context.perform {
-            book.durChapterIndex = Int32(self.currentChapterIndex)
-            book.durChapterPos = Int32(self.currentTime)
+            book.durChapterIndex = Int32(clamping: max(0, self.currentChapterIndex))
+            book.durChapterPos = self.currentTime.isFinite ? Int32(min(max(0, self.currentTime), Double(Int32.max))) : 0
             book.durChapterTime = Int64(Date().timeIntervalSince1970)
             book.durChapterTitle = self.currentChapter?.title
             try? context.save()

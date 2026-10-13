@@ -8,6 +8,7 @@
 import Foundation
 import UIKit
 
+@MainActor
 class BookExporter {
     static func exportToTXT(book: Book, chapters: [BookChapter]) async throws -> URL {
         let tempDir = FileManager.default.temporaryDirectory

@@ -142,7 +142,7 @@ class RuleSubscriptionManager: ObservableObject {
         bs.bookSourceUrl = source.bookSourceUrl
         bs.bookSourceName = source.bookSourceName
         bs.bookSourceGroup = source.bookSourceGroup
-        bs.bookSourceType = Int32(source.bookSourceType ?? 0)
+        bs.bookSourceType = Int32(clamping: source.bookSourceType ?? 0)
         bs.bookUrlPattern = source.bookUrlPattern
         bs.header = source.header
         bs.concurrentRate = source.concurrentRate
@@ -151,7 +151,7 @@ class RuleSubscriptionManager: ObservableObject {
         bs.exploreUrl = source.exploreUrl
         bs.enabled = source.enabled ?? true
         bs.enabledExplore = source.enabledExplore ?? true
-        bs.weight = Int32(source.weight ?? 0)
+        bs.weight = Int32(clamping: source.weight ?? 0)
         bs.lastUpdateTime = Int64(Date().timeIntervalSince1970)
     }
 

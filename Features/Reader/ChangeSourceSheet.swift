@@ -71,15 +71,24 @@ class ChangeSourceViewModel: ObservableObject {
         }
         
         let totalSources = sources.count
+        let bookName = book.name
+        let bookAuthor = book.author
+        let currentOrigin = book.origin
+        let currentSourceID = book.source?.sourceId ?? UUID(uuidString: book.origin)
+        let searchInputs = sources.compactMap { source -> (BookSource, BookSourceSnapshot)? in
+            guard let definition = try? BookSourceSnapshot.capture(source) else { return nil }
+            return (source, definition)
+        }
         var completedCount = 0
         
         // 搜索与换源共用实际的并发限制。
-        await ConcurrentSourceSearch.run(sources) { source -> ChangeSourceResult? in
+        await ConcurrentSourceSearch.run(searchInputs) { item -> ChangeSourceResult? in
+            let (source, definition) = item
             do {
-                let searchResults = try await WebBook.searchBook(source: source, key: book.name)
+                let searchResults = try await WebBook.searchBook(source: definition, key: bookName)
                 let matched = searchResults.first { searchBook in
-                    searchBook.name == book.name &&
-                    (book.author.isEmpty || searchBook.author == book.author)
+                    searchBook.name == bookName &&
+                    (bookAuthor.isEmpty || searchBook.author == bookAuthor)
                 }
                 guard let matched else { return nil }
                 return ChangeSourceResult(
@@ -88,12 +97,12 @@ class ChangeSourceViewModel: ObservableObject {
                     chapterCount: 0,
                     bookUrl: matched.bookUrl,
                     tocUrl: "",
-                    isCurrentSource: source.bookSourceUrl == book.origin
+                    isCurrentSource: definition.sourceId == currentSourceID || definition.bookSourceUrl == currentOrigin
                 )
             } catch is CancellationError {
                 return nil
             } catch {
-                print("换源搜索失败[\(source.bookSourceName)]: \(error.localizedDescription)")
+                print("换源搜索失败[\(definition.bookSourceName)]: \(error.localizedDescription)")
                 return nil
             }
         } onResult: { result in
@@ -120,61 +129,24 @@ class ChangeSourceViewModel: ObservableObject {
         result: ChangeSourceResult,
         for book: Book
     ) async throws {
-        let context = CoreDataStack.shared.viewContext
-        
-        // 更新 book 的书源信息
-        book.origin = result.source.bookSourceUrl
-        book.originName = result.source.bookSourceName
-        book.bookUrl = result.bookUrl
-        book.tocUrl = result.tocUrl
-        book.latestChapterTitle = result.latestChapter
-        book.updatedAt = Date()
-        
-        // 关联新书源
-        book.source = result.source
-        
-        // 删除旧章节缓存
-        if let chapters = book.chapters as? Set<BookChapter> {
-            for chapter in chapters {
-                context.delete(chapter)
-            }
+        let original = try BookRequestSnapshot.capture(book)
+        let definition = try BookSourceSnapshot.capture(result.source)
+        var candidate = original
+        candidate.origin = definition.bookSourceUrl
+        candidate.bookUrl = result.bookUrl
+        candidate.tocUrl = result.tocUrl.isEmpty ? result.bookUrl : result.tocUrl
+        candidate.tocHtml = nil
+        if definition.getBookInfoRule() != nil {
+            candidate = try await WebBook.getBookInfo(source: definition, book: candidate)
         }
-        
-        // 重新获取目录
-        let webChapters = try await WebBook.getChapterList(
-            source: result.source,
-            book: book
-        )
-        
-        for web in webChapters {
-            let chapter = BookChapter.create(
-                in: context,
-                bookId: book.bookId,
-                url: web.url,
-                index: Int32(web.index),
-                title: web.title
-            )
-            chapter.book = book
-            chapter.sourceId = result.source.sourceId.uuidString
-            chapter.isVIP = web.isVip
-        }
-        
-        book.totalChapterNum = Int32(webChapters.count)
-        
-        // 保持阅读进度（通过章节标题匹配）
-        if let currentTitle = book.durChapterTitle {
-            if let matchedIndex = webChapters.firstIndex(where: { $0.title == currentTitle }) {
-                book.durChapterIndex = Int32(matchedIndex)
-            } else {
-                // 标题不匹配时，按比例定位
-                let progress = Double(book.durChapterIndex) / max(1, Double(book.totalChapterNum))
-                book.durChapterIndex = Int32(Double(webChapters.count) * progress)
-            }
-        }
-        
-        try context.save()
+        let webChapters = try await WebBook.getChapterList(source: definition, book: candidate)
+        guard !webChapters.isEmpty else { throw WebBookError.noRule("新书源未返回目录，已保留原书源") }
+        try Task.checkCancellation()
+        candidate.latestChapterTitle = candidate.latestChapterTitle ?? result.latestChapter
+        try await ChapterDirectoryUpdater.replace(book: book, source: result.source, original: original,
+                                                   metadata: candidate, definition: definition, chapters: webChapters)
     }
-    
+
     /// 取消搜索
     func cancelSearch() {
         searchID = UUID()
@@ -186,8 +158,7 @@ class ChangeSourceViewModel: ObservableObject {
     /// 排序结果（当前源置顶，其余按章节数降序）
     private func sortResults() {
         results.sort { a, b in
-            if a.isCurrentSource { return true }
-            if b.isCurrentSource { return false }
+            if a.isCurrentSource != b.isCurrentSource { return a.isCurrentSource }
             return a.chapterCount > b.chapterCount
         }
     }
@@ -200,6 +171,8 @@ struct ChangeSourceSheet: View {
     @Binding var isPresented: Bool
     let book: Book
     let onSourceChanged: () -> Void
+    @State private var changeTask: Task<Void, Never>?
+    @State private var changeError: String?
     
     var body: some View {
         NavigationView {
@@ -230,6 +203,7 @@ struct ChangeSourceSheet: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("取消") {
                         viewModel.cancelSearch()
+                        changeTask?.cancel()
                         isPresented = false
                     }
                 }
@@ -250,6 +224,15 @@ struct ChangeSourceSheet: View {
             .task {
                 await viewModel.searchSources(for: book)
             }
+            .onDisappear {
+                viewModel.cancelSearch()
+                changeTask?.cancel()
+            }
+            .alert("换源失败", isPresented: Binding(
+                get: { changeError != nil }, set: { if !$0 { changeError = nil } }
+            )) {
+                Button("确定", role: .cancel) { changeError = nil }
+            } message: { Text(changeError ?? "") }
         }
     }
     
@@ -278,22 +261,29 @@ struct ChangeSourceSheet: View {
         List {
             ForEach(viewModel.results) { result in
                 SourceResultRow(result: result) {
-                    Task {
+                    guard changeTask == nil else { return }
+                    viewModel.cancelSearch()
+                    changeTask = Task {
+                        defer { changeTask = nil }
                         do {
                             try await viewModel.changeSource(
                                 result: result,
                                 for: book
                             )
+                            guard !Task.isCancelled else { return }
                             onSourceChanged()
                             isPresented = false
+                        } catch is CancellationError {
+                            return
                         } catch {
-                            viewModel.errorMessage = "换源失败: \(error.localizedDescription)"
+                            changeError = error.localizedDescription
                         }
                     }
                 }
             }
         }
         .listStyle(.plain)
+        .disabled(changeTask != nil)
     }
 }
 
@@ -355,6 +345,7 @@ struct SourceResultRow: View {
             }
             .padding(.vertical, 4)
         }
+        .accessibilityIdentifier("changeSource.result." + result.source.bookSourceName)
         .disabled(result.isCurrentSource)
     }
 }

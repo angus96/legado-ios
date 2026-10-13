@@ -19,7 +19,7 @@ fixtures = """
 import Foundation
 import JavaScriptCore
 
-final class BookSource {
+final class BookSourceSnapshot {
     var bookSourceUrl = "https://example.com"
     var bookSourceName = "Regression source"
     var loginUrl: String? = nil
@@ -29,6 +29,7 @@ final class BookSource {
     var concurrentRate: String? = nil
 }
 final class RuleEngine {}
+typealias BookSource = BookSourceSnapshot
 final class CookieManager {
     static let shared = CookieManager()
     func getCookie(for tag: String) -> String? { nil }

@@ -68,6 +68,21 @@ private final class HttpTTSAudioDelegate: NSObject, AVAudioPlayerDelegate, @unch
     }
 }
 
+private struct TTSRequestSnapshot {
+    let name: String
+    let url: String
+    let header: String?
+    let contentType: String?
+    let concurrentRate: String?
+    let loginUrl: String?
+    static func capture(_ config: HttpTTS) throws -> TTSRequestSnapshot {
+        try ManagedObjectAccess.read(config) {
+            TTSRequestSnapshot(name: $0.name, url: $0.url, header: $0.header, contentType: $0.contentType,
+                               concurrentRate: $0.concurrentRate, loginUrl: $0.loginUrl)
+        }
+    }
+}
+
 actor HttpTTSPlaybackManager {
     typealias StateChangeHandler = @MainActor (HttpTTSPlaybackState) -> Void
     typealias ProgressChangeHandler = @MainActor (HttpTTSPlaybackProgress) -> Void
@@ -79,6 +94,7 @@ actor HttpTTSPlaybackManager {
     private var player: AVAudioPlayer?
     private var progressTask: Task<Void, Never>?
 
+    private var playbackRequestID = UUID()
     private var state: HttpTTSPlaybackState = .idle
     private var currentHeaders: [String: String] = [:]
     private var currentCacheKey: String = ""
@@ -149,8 +165,10 @@ actor HttpTTSPlaybackManager {
         }
 
         stopInternal(newState: .stopped)
+        let requestID = playbackRequestID
 
         do {
+            let config = try TTSRequestSnapshot.capture(config)
             updateState(.loading)
             currentHeaders = parseHeaders(from: config.header)
             if let contentType = config.contentType?.trimmingCharacters(in: .whitespacesAndNewlines), !contentType.isEmpty {
@@ -164,9 +182,11 @@ actor HttpTTSPlaybackManager {
             for attempt in 0...maxRetryCount {
                 do {
                     let localPath = try await downloadAudio(url: url)
+                    guard playbackRequestID == requestID, !Task.isCancelled else { return }
                     try play(localPath: localPath)
                     return
                 } catch {
+                    guard playbackRequestID == requestID, !Task.isCancelled else { return }
                     lastError = error
                     DebugLogger.shared.log("HttpTTS 下载或播放失败，attempt=\(attempt + 1): \(error.localizedDescription)")
                     if attempt < maxRetryCount {
@@ -187,6 +207,10 @@ actor HttpTTSPlaybackManager {
     }
 
     func generateUrl(text: String, config: HttpTTS) throws -> URL {
+        try generateUrl(text: text, config: TTSRequestSnapshot.capture(config))
+    }
+
+    private func generateUrl(text: String, config: TTSRequestSnapshot) throws -> URL {
         let template = config.url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !template.isEmpty else {
             throw HttpTTSPlaybackError.invalidConfig("URL 为空")
@@ -298,6 +322,7 @@ actor HttpTTSPlaybackManager {
     }
 
     private func stopInternal(newState: HttpTTSPlaybackState) {
+        playbackRequestID = UUID()
         stopProgressLoop()
         player?.stop()
         player = nil
@@ -401,7 +426,7 @@ actor HttpTTSPlaybackManager {
         return [:]
     }
 
-    private func buildCacheKey(text: String, config: HttpTTS) -> String {
+    private func buildCacheKey(text: String, config: TTSRequestSnapshot) -> String {
         let parts = [
             config.name,
             text,

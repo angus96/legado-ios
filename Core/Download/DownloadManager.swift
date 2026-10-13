@@ -49,16 +49,19 @@ class DownloadManager: ObservableObject {
         // 获取章节列表
         let context = CoreDataStack.shared.viewContext
         let request: NSFetchRequest<BookChapter> = BookChapter.fetchRequest()
-        request.predicate = NSPredicate(format: "bookId == %@ AND index IN %@", book.bookId as CVarArg, chapterIndices.map { Int32($0) })
+        request.predicate = NSPredicate(format: "bookId == %@ AND index IN %@", book.bookId as CVarArg, chapterIndices.compactMap { Int32(exactly: $0) })
         
-        guard let chapters = try? context.fetch(request) else { return }
+        guard let chapters = try? context.fetch(request) else {
+            isDownloading = false
+            return
+        }
         
-        for chapter in chapters {
+        for (completed, chapter) in chapters.enumerated() {
             await downloadChapter(chapter, for: book)
             
             // 更新进度
             if let index = downloads.firstIndex(where: { $0.bookId == book.bookId }) {
-                downloads[index].progress = Double(chapter.index + 1) / Double(chapters.count)
+                downloads[index].progress = Double(completed + 1) / Double(chapters.count)
             }
         }
         

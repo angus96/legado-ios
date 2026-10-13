@@ -43,41 +43,31 @@ class ConcurrentRateLimiter {
         concurrentRecordMapLock.lock()
         defer { concurrentRecordMapLock.unlock() }
 
+        guard let settings = parseRate(concurrentRate) else { return }
         let existing = concurrentRecordMap[key]
-        let rateIndex = concurrentRate.firstIndex(of: "/")
+        concurrentRecordMap[key] = ConcurrentRecord(
+            time: existing?.time ?? Int64(Date().timeIntervalSince1970 * 1000),
+            accessLimit: settings.limit, interval: settings.interval, frequency: existing?.frequency ?? 0
+        )
+    }
 
-        if let rateIndex = rateIndex {
-            let accessLimitStr = String(concurrentRate[concurrentRate.startIndex..<rateIndex])
-            let intervalStr = String(concurrentRate[concurrentRate.index(after: rateIndex)...])
-            guard let accessLimit = Int(accessLimitStr),
-                  let interval = Int(intervalStr),
-                  accessLimit > 0, interval > 0 else {
-                return
-            }
-            concurrentRecordMap[key] = ConcurrentRecord(
-                time: existing?.time ?? Int64(Date().timeIntervalSince1970 * 1000),
-                accessLimit: accessLimit,
-                interval: interval,
-                frequency: existing?.frequency ?? 0
-            )
-        } else if let rate = Int(concurrentRate), rate > 0 {
-            concurrentRecordMap[key] = ConcurrentRecord(
-                time: existing?.time ?? Int64(Date().timeIntervalSince1970 * 1000),
-                accessLimit: 1,
-                interval: rate,
-                frequency: existing?.frequency ?? 0
-            )
-        }
+    private static func parseRate(_ rate: String) -> (limit: Int, interval: Int)? {
+        let parts = rate.split(separator: "/", omittingEmptySubsequences: false)
+        guard (1...2).contains(parts.count) else { return nil }
+        let limit = parts.count == 1 ? 1 : Int(parts[0])
+        let interval = parts.count == 1 ? Int(parts[0]) : parts.count == 2 ? Int(parts[1]) : nil
+        guard let limit, let interval, (1...10_000).contains(limit), (1...86_400_000).contains(interval) else { return nil }
+        return (limit, interval)
     }
 
     private let concurrentRate: String?
     private let key: String?
 
-    init(source: AnyObject?) {
+    init(source: BookSourceDefinition?) {
         // 从 BookSource 获取 concurrentRate
-        if let source = source as? BookSource {
-            self.concurrentRate = source.concurrentRate
-            self.key = source.bookSourceUrl
+        if let source = source, let snapshot = try? BookSourceSnapshot.capture(source) {
+            self.concurrentRate = snapshot.concurrentRate
+            self.key = snapshot.bookSourceUrl
         } else {
             self.concurrentRate = nil
             self.key = nil
@@ -96,7 +86,7 @@ class ConcurrentRateLimiter {
     private func fetchStart() throws -> ConcurrentRecord? {
         guard let concurrentRate = concurrentRate,
               !concurrentRate.isEmpty, concurrentRate != "0",
-              let key = key else {
+              let key = key, let settings = Self.parseRate(concurrentRate) else {
             return nil
         }
 
@@ -109,24 +99,10 @@ class ConcurrentRateLimiter {
             fetchRecord = existing
         } else {
             isNewRecord = true
-            let rateIndex = concurrentRate.firstIndex(of: "/")
-            if let rateIndex = rateIndex {
-                let accessLimit = Int(String(concurrentRate[concurrentRate.startIndex..<rateIndex])) ?? 1
-                let interval = Int(String(concurrentRate[concurrentRate.index(after: rateIndex)...])) ?? 0
-                fetchRecord = ConcurrentRecord(
-                    time: Int64(Date().timeIntervalSince1970 * 1000),
-                    accessLimit: accessLimit,
-                    interval: interval,
-                    frequency: 1
-                )
-            } else {
-                fetchRecord = ConcurrentRecord(
-                    time: Int64(Date().timeIntervalSince1970 * 1000),
-                    accessLimit: 1,
-                    interval: Int(concurrentRate) ?? 0,
-                    frequency: 1
-                )
-            }
+            fetchRecord = ConcurrentRecord(
+                time: Int64(Date().timeIntervalSince1970 * 1000),
+                accessLimit: settings.limit, interval: settings.interval, frequency: 1
+            )
             Self.concurrentRecordMap[key] = fetchRecord
         }
 
@@ -166,6 +142,7 @@ class ConcurrentRateLimiter {
     /// 获取并发记录，若处于并发限制状态下则会等待（对应 Android getConcurrentRecord）
     func getConcurrentRecord() async throws -> ConcurrentRecord? {
         while true {
+            try Task.checkCancellation()
             do {
                 return try fetchStart()
             } catch let error as ConcurrentError {

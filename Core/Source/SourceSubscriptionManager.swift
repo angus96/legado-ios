@@ -236,7 +236,7 @@ class SourceSubscriptionManager: ObservableObject {
         bookSource.bookSourceUrl = source.bookSourceUrl
         bookSource.bookSourceName = source.bookSourceName
         bookSource.bookSourceGroup = source.bookSourceGroup
-        bookSource.bookSourceType = Int32(source.bookSourceType ?? 0)
+        bookSource.bookSourceType = Int32(clamping: source.bookSourceType ?? 0)
         bookSource.bookUrlPattern = source.bookUrlPattern
         bookSource.header = source.header
         bookSource.concurrentRate = source.concurrentRate
@@ -245,7 +245,7 @@ class SourceSubscriptionManager: ObservableObject {
         bookSource.exploreUrl = source.exploreUrl
         bookSource.enabled = source.enabled ?? true
         bookSource.enabledExplore = source.enabledExplore ?? true
-        bookSource.weight = Int32(source.weight ?? 0)
+        bookSource.weight = Int32(clamping: source.weight ?? 0)
         bookSource.lastUpdateTime = Int64(Date().timeIntervalSince1970)
         
         // 规则数据

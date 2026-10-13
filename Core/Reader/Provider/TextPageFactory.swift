@@ -9,6 +9,7 @@
 import Foundation
 
 /// 数据源协议
+@MainActor
 protocol PageDataSource {
     var currentChapter: TextChapter? { get }
     var prevChapter: TextChapter? { get }
@@ -22,6 +23,7 @@ protocol PageDataSource {
 /// 页面工厂
 /// 一比一移植自 Android Legado TextPageFactory
 /// 管理当前页、上一页、下一页的获取
+@MainActor
 class TextPageFactory {
     private let dataSource: PageDataSource
     

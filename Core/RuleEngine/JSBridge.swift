@@ -48,7 +48,7 @@ class JSBridge: JsEncodeUtils {
             guard !url.isEmpty else { return }
             let headers = self?.parseSourceHeaders()
             JSBridgeHTTPClient.asyncGet(url: url, headers: headers) { result in
-                DispatchQueue.main.async { self?.context?.variables["result"] = result ?? "" }
+                self?.context?.setVariable("result", value: result ?? "")
             }
         }
         javaObject?.setObject(getStringAsyncBlock, forKeyedSubscript: "getStringAsync" as NSString)
@@ -73,12 +73,12 @@ class JSBridge: JsEncodeUtils {
         // ====== 变量存取 ======
 
         let putBlock: @convention(block) (String, String) -> String = { [weak self] key, value in
-            self?.context?.variables[key] = value; return value
+            self?.context?.setVariable(key, value: value); return value
         }
         javaObject?.setObject(putBlock, forKeyedSubscript: "put" as NSString)
 
         let getBlock: @convention(block) (String) -> String = { [weak self] key in
-            self?.context?.variables[key] ?? ""
+            self?.context?.getVariable(key) ?? ""
         }
         javaObject?.setObject(getBlock, forKeyedSubscript: "get" as NSString)
 

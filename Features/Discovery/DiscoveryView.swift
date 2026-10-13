@@ -387,7 +387,7 @@ class DiscoveryViewModel: ObservableObject {
 
     private func evaluateExploreJavaScript(_ script: String, source: BookSource) -> String? {
         let context = ExecutionContext()
-        context.source = source
+        context.source = try? BookSourceSnapshot.capture(source)
         context.baseURL = URL(string: source.bookSourceUrl)
 
         if let variable = source.variable,

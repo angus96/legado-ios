@@ -155,12 +155,12 @@ struct BookSourceAPI {
         source.bookSourceUrl = json.bookSourceUrl
         source.bookSourceName = json.bookSourceName
         source.bookSourceGroup = json.bookSourceGroup ?? ""
-        source.bookSourceType = Int32(json.bookSourceType ?? 0)
+        source.bookSourceType = Int32(clamping: json.bookSourceType ?? 0)
         source.enabled = json.enabled ?? true
         source.enabledExplore = json.enabledExplore ?? true
         source.searchUrl = json.searchUrl ?? ""
         source.exploreUrl = json.exploreUrl ?? ""
-        source.weight = Int32(json.weight ?? 0)
+        source.weight = Int32(clamping: json.weight ?? 0)
         source.lastUpdateTime = Int64(json.lastUpdateTime ?? 0)
         source.respondTime = Int64(json.respondTime ?? 60000)
         source.loginUrl = json.loginUrl ?? ""

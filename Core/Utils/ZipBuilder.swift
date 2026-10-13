@@ -105,11 +105,13 @@ class ZipBuilder {
         
         let cdOffset = Int(data.readUInt32(at: eocdOffset + 16))
         let cdCount = Int(data.readUInt16(at: eocdOffset + 10))
+        guard cdOffset <= eocdOffset else { throw invalidArchive() }
         var currentOffset = cdOffset
+        var totalExpanded = 0
         
         for _ in 0..<cdCount {
             guard currentOffset + 46 <= data.count,
-                  data.readUInt32(at: currentOffset) == centralDirectorySignature else { break }
+                  data.readUInt32(at: currentOffset) == centralDirectorySignature else { throw invalidArchive() }
             
             let method = data.readUInt16(at: currentOffset + 10)
             let compressedSize = Int(data.readUInt32(at: currentOffset + 20))
@@ -118,9 +120,13 @@ class ZipBuilder {
             let extraLen = Int(data.readUInt16(at: currentOffset + 30))
             let commentLen = Int(data.readUInt16(at: currentOffset + 32))
             let localHeaderOffset = Int(data.readUInt32(at: currentOffset + 42))
+            let recordEnd = currentOffset + 46 + nameLen + extraLen + commentLen
+            guard recordEnd <= eocdOffset, uncompressedSize <= 64 * 1024 * 1024,
+                  totalExpanded <= 256 * 1024 * 1024 - uncompressedSize else { throw invalidArchive() }
+            totalExpanded += uncompressedSize
             
             let nameData = data.subdata(in: currentOffset + 46 ..< currentOffset + 46 + nameLen)
-            let name = String(data: nameData, encoding: .utf8) ?? ""
+            guard let name = String(data: nameData, encoding: .utf8), !name.isEmpty else { throw invalidArchive() }
             
             if localHeaderOffset + 30 <= data.count,
                data.readUInt32(at: localHeaderOffset) == localFileHeaderSignature {
@@ -138,12 +144,12 @@ class ZipBuilder {
                         uncompressedData = inflateRawDeflate(data: compressedData, uncompressedSize: uncompressedSize)
                     }
                     
-                    if let fileData = uncompressedData, !name.hasSuffix("/") {
-                        result[name] = fileData
-                    }
-                }
-            }
-            currentOffset += 46 + nameLen + extraLen + commentLen
+                    guard let fileData = uncompressedData, fileData.count == uncompressedSize,
+                          ZipBuilder().computeCRC32(fileData) == data.readUInt32(at: currentOffset + 16) else { throw invalidArchive() }
+                    if !name.hasSuffix("/") { result[name] = fileData }
+                } else { throw invalidArchive() }
+            } else { throw invalidArchive() }
+            currentOffset = recordEnd
         }
         
         if result.isEmpty { throw NSError(domain: "ZipBuilder", code: 2, userInfo: [NSLocalizedDescriptionKey: "解压失败或文件为空"]) }
@@ -151,14 +157,20 @@ class ZipBuilder {
     }
     
     private static func findEOCD(in data: Data) -> Int? {
+        guard data.count >= 22 else { return nil }
         let signature: [UInt8] = [0x50, 0x4b, 0x05, 0x06]
         let minOffset = max(0, data.count - 65536 - 22)
         for i in stride(from: data.count - 22, through: minOffset, by: -1) {
-            if data[i] == signature[0] && data[i+1] == signature[1] && data[i+2] == signature[2] && data[i+3] == signature[3] {
+            if data[i] == signature[0] && data[i+1] == signature[1] && data[i+2] == signature[2] && data[i+3] == signature[3],
+               i + 22 + Int(data.readUInt16(at: i + 20)) == data.count {
                 return i
             }
         }
         return nil
+    }
+
+    private static func invalidArchive() -> NSError {
+        NSError(domain: "ZipBuilder", code: 3, userInfo: [NSLocalizedDescriptionKey: "ZIP 文件损坏、格式不支持或解压大小超出限制"])
     }
     
     // 调用底层 zlib 进行 Raw Deflate 解压
@@ -182,7 +194,7 @@ class ZipBuilder {
             defer { inflateEnd(&stream) }
             
             let status = inflate(&stream, Z_FINISH)
-            if status == Z_STREAM_END || status == Z_OK {
+            if status == Z_STREAM_END, Int(stream.total_out) == uncompressedSize {
                 return Data(bytes: destBuffer, count: uncompressedSize)
             }
             return nil
@@ -277,11 +289,12 @@ fileprivate extension Data {
         append(Data(bytes: &v, count: MemoryLayout<UInt32>.size))
     }
     func readUInt16(at offset: Int) -> UInt16 {
-        guard offset + 2 <= count else { return 0 }
-        return self[offset..<offset+2].withUnsafeBytes { $0.load(as: UInt16.self).littleEndian }
+        guard offset >= 0, count >= 2, offset <= count - 2 else { return 0 }
+        return UInt16(self[offset]) | (UInt16(self[offset + 1]) << 8)
     }
     func readUInt32(at offset: Int) -> UInt32 {
-        guard offset + 4 <= count else { return 0 }
-        return self[offset..<offset+4].withUnsafeBytes { $0.load(as: UInt32.self).littleEndian }
+        guard offset >= 0, count >= 4, offset <= count - 4 else { return 0 }
+        return UInt32(self[offset]) | (UInt32(self[offset + 1]) << 8) |
+            (UInt32(self[offset + 2]) << 16) | (UInt32(self[offset + 3]) << 24)
     }
 }

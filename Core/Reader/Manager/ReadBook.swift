@@ -9,12 +9,14 @@
 import Foundation
 import CoreData
 
+@MainActor
 protocol ReadBookCallBack: AnyObject {
     func upContent()
     func upMenuView()
     func upPageAnim()
 }
 
+@MainActor
 class ReadBook: ObservableObject {
     static let shared = ReadBook()
     
@@ -37,6 +39,7 @@ class ReadBook: ObservableObject {
     
     var msg: String?
     
+    private var loadGeneration = UUID()
     private var loadingChapters: Set<Int> = []
     private var chapterLoadingTasks: [Int: Task<Void, Never>] = [:]
     
@@ -91,7 +94,7 @@ class ReadBook: ObservableObject {
         if book.isLocal {
             bookSource = nil
         } else {
-            bookSource = nil
+            bookSource = try? BookSourceResolver.resolve(for: book)
         }
     }
     
@@ -102,6 +105,7 @@ class ReadBook: ObservableObject {
     }
     
     func releaseAndCancel() {
+        loadGeneration = UUID()
         for (_, task) in chapterLoadingTasks {
             task.cancel()
         }
@@ -110,98 +114,47 @@ class ReadBook: ObservableObject {
     }
     
     func loadContent(resetPageOffset: Bool = true) {
-        guard let book = book else { return }
-        
-        if resetPageOffset {
-            durChapterPos = 0
-        }
-        
-        Task { @MainActor in
-            await loadCurrentChapter()
-            await loadPrevChapter()
-            await loadNextChapter()
-            callBack?.upContent()
-        }
-    }
-    
-    private func loadCurrentChapter() async {
-        guard let book = book, durChapterIndex >= 0 && durChapterIndex < chapterSize else { return }
-        
-        if loadingChapters.contains(durChapterIndex) { return }
-        loadingChapters.insert(durChapterIndex)
-        
-        let task = Task {
-            do {
-                let textChapter = try await loadChapter(index: durChapterIndex, book: book)
-                await MainActor.run {
-                    self.curTextChapter = textChapter
-                    self.loadingChapters.remove(durChapterIndex)
-                }
-            } catch {
-                await MainActor.run {
-                    self.msg = "加载失败: \(error.localizedDescription)"
-                    self.loadingChapters.remove(durChapterIndex)
-                }
-            }
-        }
-        
-        chapterLoadingTasks[durChapterIndex] = task
-    }
-    
-    private func loadPrevChapter() async {
-        guard let book = book, durChapterIndex > 0 else { return }
-        let prevIndex = durChapterIndex - 1
-        
-        if loadingChapters.contains(prevIndex) { return }
-        loadingChapters.insert(prevIndex)
-        
-        let task = Task {
-            do {
-                let textChapter = try await loadChapter(index: prevIndex, book: book)
-                await MainActor.run {
-                    self.prevTextChapter = textChapter
-                    self.loadingChapters.remove(prevIndex)
-                }
-            } catch {
-                await MainActor.run {
-                    self.loadingChapters.remove(prevIndex)
+        guard let book else { return }
+        releaseAndCancel()
+        chapterSize = max(0, Int(book.totalChapterNum))
+        guard chapterSize > 0 else { return }
+        durChapterIndex = min(max(0, durChapterIndex), chapterSize - 1)
+        if resetPageOffset { durChapterPos = 0 }
+        msg = nil
+        let current = durChapterIndex
+        let generation = loadGeneration
+        for index in max(0, current - 1)...min(chapterSize - 1, current + 1) {
+            loadingChapters.insert(index)
+            chapterLoadingTasks[index] = Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let chapter = try await loadChapter(index: index, book: book)
+                    try Task.checkCancellation()
+                    guard loadGeneration == generation, self.book?.objectID == book.objectID else { return }
+                    if index == current { curTextChapter = chapter }
+                    else if index < current { prevTextChapter = chapter }
+                    else { nextTextChapter = chapter }
+                    loadingChapters.remove(index)
+                    chapterLoadingTasks[index] = nil
+                    callBack?.upContent()
+                    callBack?.upMenuView()
+                } catch {
+                    guard loadGeneration == generation, !Task.isCancelled else { return }
+                    if index == current { msg = "加载失败：\(error.localizedDescription)" }
+                    loadingChapters.remove(index)
+                    chapterLoadingTasks[index] = nil
+                    callBack?.upContent()
                 }
             }
         }
-        
-        chapterLoadingTasks[prevIndex] = task
     }
-    
-    private func loadNextChapter() async {
-        guard let book = book, durChapterIndex < chapterSize - 1 else { return }
-        let nextIndex = durChapterIndex + 1
-        
-        if loadingChapters.contains(nextIndex) { return }
-        loadingChapters.insert(nextIndex)
-        
-        let task = Task {
-            do {
-                let textChapter = try await loadChapter(index: nextIndex, book: book)
-                await MainActor.run {
-                    self.nextTextChapter = textChapter
-                    self.loadingChapters.remove(nextIndex)
-                }
-            } catch {
-                await MainActor.run {
-                    self.loadingChapters.remove(nextIndex)
-                }
-            }
-        }
-        
-        chapterLoadingTasks[nextIndex] = task
-    }
-    
+
     private func loadChapter(index: Int, book: Book) async throws -> TextChapter {
-        let context = CoreDataStack.shared.newBackgroundContext()
+        guard let context = book.managedObjectContext else { throw ManagedObjectAccessError.unavailable }
         
         let chapter: BookChapter = try await context.perform {
             let request: NSFetchRequest<BookChapter> = BookChapter.fetchRequest()
-            request.predicate = NSPredicate(format: "book.bookUrl == %@ AND index == %d", book.bookUrl, index)
+            request.predicate = NSPredicate(format: "bookId == %@ AND index == %d", book.bookId as CVarArg, index)
             request.fetchLimit = 1
             
             guard let chapter = try context.fetch(request).first else {
@@ -226,30 +179,22 @@ class ReadBook: ObservableObject {
         
         let bookContent = BookContent(textList: content)
         
-        await MainActor.run {
-            let layout = TextChapterLayout(
-                textChapter: textChapter,
-                textPages: [],
-                book: book,
-                bookContent: bookContent
-            )
-            
-            Task {
-                await layout.startLayout()
-            }
-        }
-        
+        let layout = TextChapterLayout(textChapter: textChapter, textPages: [], book: book, bookContent: bookContent)
+        await layout.startLayout()
+        try Task.checkCancellation()
+        if let error = layout.exception { throw error }
         return textChapter
     }
-    
+
     private func getChapterContent(chapter: BookChapter, book: Book) async throws -> [String] {
-        if book.isLocal {
-            return ["章节内容加载中..."]
-        } else {
-            return ["正在加载章节内容..."]
-        }
+        let content = try await ChapterContentLoader.load(chapter: chapter, book: book)
+        try Task.checkCancellation()
+        let replaced = ReplaceEngineEnhanced.shared.applyForReader(text: content, bookId: book.bookId,
+                                                                   chapterId: chapter.chapterId,
+                                                                   context: book.managedObjectContext ?? CoreDataStack.shared.viewContext)
+        return replaced.components(separatedBy: .newlines).filter { !$0.isEmpty }
     }
-    
+
     func setPageIndex(_ index: Int) {
         durChapterPos = index
         callBack?.upContent()
@@ -295,11 +240,15 @@ class ReadBook: ObservableObject {
     
     func saveReadProgress() {
         guard let book = book else { return }
-        
-        let context = CoreDataStack.shared.viewContext
+        guard let context = book.managedObjectContext else { return }
+        let index = Int32(clamping: max(0, durChapterIndex))
+        let position = Int32(clamping: max(0, durChapterPos))
+        let origin = book.origin
+        let bookURL = book.bookUrl
         context.perform {
-            book.durChapterIndex = Int32(self.durChapterIndex)
-            book.durChapterPos = Int32(self.durChapterPos)
+            guard !book.isDeleted, book.origin == origin, book.bookUrl == bookURL else { return }
+            book.durChapterIndex = index
+            book.durChapterPos = position
             book.durChapterTime = Int64(Date().timeIntervalSince1970)
             book.updatedAt = Date()
             

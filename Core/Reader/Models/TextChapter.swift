@@ -25,6 +25,8 @@ class TextChapter {
     var pages: [TextPage] { textPages }
     
     var isCompleted: Bool = false
+
+    func appendPage(_ page: TextPage) { textPages.append(page) }
     
     static let empty = TextChapter(
         chapter: nil,

@@ -112,7 +112,10 @@ struct BookDetailView: View {
             ChapterListView(viewModel: ReaderViewModel(), book: book)
         }
         .sheet(isPresented: $showingSourceSelection) {
-            SourceSelectionSheet(book: book, selectedSource: $viewModel.currentSource)
+            ChangeSourceSheet(isPresented: $showingSourceSelection, book: book) {
+                viewModel.currentSource = try? BookSourceResolver.resolve(for: book)
+                Task { await viewModel.loadChapters() }
+            }
         }
         .sheet(isPresented: $showingEditSheet) {
             BookEditSheet(book: book)
@@ -521,8 +524,7 @@ class BookDetailViewModel: ObservableObject {
                 let chapters = try context.fetch(request)
                 for chapter in chapters {
                     if !chapter.isCached {
-                        let content = try await WebBook.getContent(source: source, book: book, chapter: chapter)
-                        try cacheChapterToDisk(chapter: chapter, content: content)
+                        try await ChapterContentLoader.cache(chapter: chapter, book: book)
                     }
                 }
                 try CoreDataStack.shared.save()
@@ -534,55 +536,21 @@ class BookDetailViewModel: ObservableObject {
     }
     
     private func resolveSource() throws -> BookSource {
-        if let currentSource { return currentSource }
-        guard let sourceUUID = UUID(uuidString: book.origin) else {
-            throw NSError(domain: "BookDetailViewModel", code: 1, userInfo: nil)
-        }
-        let request: NSFetchRequest<BookSource> = BookSource.fetchRequest()
-        request.fetchLimit = 1
-        request.predicate = NSPredicate(format: "sourceId == %@", sourceUUID as CVarArg)
-        if let source = try context.fetch(request).first {
-            currentSource = source
-            return source
-        }
-        throw NSError(domain: "BookDetailViewModel", code: 2, userInfo: nil)
+        guard let source = try BookSourceResolver.resolve(for: book) else { throw ReaderError.noSource }
+        currentSource = source
+        return source
     }
-    
+
     private func refreshChapterList(source: BookSource) async throws -> Int {
-        let webChapters = try await WebBook.getChapterList(source: source, book: book)
-        let request = BookChapter.fetchRequest(byBookId: book.bookId)
-        let existing = try context.fetch(request)
-        var existingByUrl: [String: BookChapter] = [:]
-        for chapter in existing where !chapter.chapterUrl.isEmpty {
-            if existingByUrl[chapter.chapterUrl] == nil {
-                existingByUrl[chapter.chapterUrl] = chapter
-            }
-        }
-        for web in webChapters {
-            let url = web.url
-            guard !url.isEmpty else { continue }
-            if let chapter = existingByUrl[url] {
-                chapter.title = web.title
-                chapter.index = Int32(web.index)
-                chapter.isVIP = web.isVip
-                if let updateTime = web.updateTime {
-                    chapter.updateTime = updateTime
-                }
-            } else {
-                let chapter = BookChapter.create(in: context, bookId: book.bookId, url: url, index: Int32(web.index), title: web.title)
-                chapter.book = book
-                chapter.sourceId = source.sourceId.uuidString
-                chapter.isVIP = web.isVip
-                if let updateTime = web.updateTime {
-                    chapter.updateTime = updateTime
-                }
-            }
-        }
-        book.totalChapterNum = Int32(webChapters.count)
-        try CoreDataStack.shared.save()
-        return webChapters.count
+        let original = try BookRequestSnapshot.capture(book)
+        let definition = try BookSourceSnapshot.capture(source)
+        let chapters = try await WebBook.getChapterList(source: definition, book: original)
+        try Task.checkCancellation()
+        try await ChapterDirectoryUpdater.replace(book: book, source: source, original: original,
+                                                  metadata: original, definition: definition, chapters: chapters)
+        return chapters.count
     }
-    
+
     private func cacheChapterToDisk(chapter: BookChapter, content: String) throws {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("chapters", isDirectory: true)
         if !FileManager.default.fileExists(atPath: dir.path) {

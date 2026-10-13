@@ -26,6 +26,7 @@ enum RssService {
         rssSource: RssSource,
         page: Int
     ) async throws -> (items: [RssParseItem], nextUrl: String?) {
+        let rssSource = try RssSourceSnapshot.capture(rssSource)
         // 替换页码模板
         let urlString = sortUrl
             .replacingOccurrences(of: "{{page}}", with: "\(page)")
@@ -67,13 +68,15 @@ enum RssService {
         ruleContent: String?,
         rssSource: RssSource
     ) async throws -> String {
+        let rssSource = try RssSourceSnapshot.capture(rssSource)
+        let articleData = try ManagedObjectAccess.read(article) { ($0.articleDescription, $0.content, $0.link) }
         guard let ruleContent = ruleContent, !ruleContent.isEmpty else {
             // 无正文规则，返回文章已有的 description 或 content
-            return article.articleDescription ?? article.content ?? ""
+            return articleData.0 ?? articleData.1 ?? ""
         }
         
         // 请求正文页面
-        let baseUrl = absoluteURL(base: rssSource.sourceUrl, relative: article.link)
+        let baseUrl = absoluteURL(base: rssSource.sourceUrl, relative: articleData.2)
         
         let (body, _) = try await HTTPClient.shared.getHtml(urlString: baseUrl, headers: parseHeaders(rssSource.header))
         

@@ -436,31 +436,9 @@ class SourceViewModel: ObservableObject {
         return summary
     }
 
-    private func int32Value(_ value: Any?) -> Int32? {
-        switch value {
-        case let n as NSNumber:
-            return n.int32Value
-        case let i as Int:
-            return Int32(i)
-        case let s as String:
-            return Int32(s.trimmingCharacters(in: .whitespacesAndNewlines))
-        default:
-            return nil
-        }
-    }
+    private func int32Value(_ value: Any?) -> Int32? { JSONNumber.int32(value) }
 
-    private func int64Value(_ value: Any?) -> Int64? {
-        switch value {
-        case let n as NSNumber:
-            return n.int64Value
-        case let i as Int:
-            return Int64(i)
-        case let s as String:
-            return Int64(s.trimmingCharacters(in: .whitespacesAndNewlines))
-        default:
-            return nil
-        }
-    }
+    private func int64Value(_ value: Any?) -> Int64? { JSONNumber.int64(value) }
 
     private func boolValue(_ value: Any?) -> Bool? {
         switch value {

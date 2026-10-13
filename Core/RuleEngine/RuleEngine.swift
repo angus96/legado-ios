@@ -53,8 +53,25 @@ class ExecutionContext {
     var jsonDict: [String: Any]?
     var jsonValue: Any?
     var baseURL: URL?
-    var source: BookSource?
-    var variables: [String: String] = [:]
+    var source: BookSourceSnapshot?
+    private let variableLock = NSLock()
+    private var storedVariables: [String: String] = [:]
+    var variables: [String: String] {
+        get { variableLock.lock(); defer { variableLock.unlock() }; return storedVariables }
+        set { variableLock.lock(); defer { variableLock.unlock() }; storedVariables = newValue }
+    }
+
+    func getVariable(_ key: String) -> String {
+        variableLock.lock()
+        defer { variableLock.unlock() }
+        return storedVariables[key] ?? ""
+    }
+
+    func setVariable(_ key: String, value: String) {
+        variableLock.lock()
+        defer { variableLock.unlock() }
+        storedVariables[key] = value
+    }
     var lastResult: RuleResult = .none
     private var jsBridge: JSBridge?
 
@@ -76,12 +93,12 @@ class ExecutionContext {
         
         // 注入getVar/setVar
         let getVarBlock: @convention(block) (String) -> String = { [weak self] key in
-            self?.variables[key] ?? ""
+            self?.getVariable(key) ?? ""
         }
         context.setObject(getVarBlock, forKeyedSubscript: "getVar" as NSString)
         
         let setVarBlock: @convention(block) (String, String) -> Void = { [weak self] key, value in
-            self?.variables[key] = value
+            self?.setVariable(key, value: value)
         }
         context.setObject(setVarBlock, forKeyedSubscript: "setVar" as NSString)
         
@@ -102,11 +119,11 @@ private final class SourceRuleContextAdapter: RuleExecutionContext {
     }
 
     func getVariable(_ key: String) -> String {
-        executionContext.variables[key] ?? ""
+        executionContext.getVariable(key)
     }
 
     func setVariable(_ key: String, value: String) {
-        executionContext.variables[key] = value
+        executionContext.setVariable(key, value: value)
     }
 
     func evalJS(_ jsCode: String, result: Any?) -> String? {
@@ -241,7 +258,7 @@ class RuleEngine {
         if !sourceRule.putMap.isEmpty {
             for (key, rule) in sourceRule.putMap {
                 let resolved = try executeWithSplit(rule, context: context)
-                context.variables[key] = flatten(resolved).joined(separator: "\n")
+                context.setVariable(key, value: flatten(resolved).joined(separator: "\n"))
                 context.lastResult = resolved
             }
         }
@@ -1549,7 +1566,6 @@ private enum JSONPathEvaluator {
     }
 
     private static func boolValue(from value: Any) -> Bool? {
-        if let bool = value as? Bool { return bool }
         guard let number = value as? NSNumber else { return nil }
         if CFGetTypeID(number) == CFBooleanGetTypeID() {
             return number.boolValue
@@ -1558,7 +1574,6 @@ private enum JSONPathEvaluator {
     }
 
     private static func numberValue(from value: Any) -> NSNumber? {
-        if value is Bool { return nil }
         guard let number = value as? NSNumber else { return nil }
         if CFGetTypeID(number) == CFBooleanGetTypeID() {
             return nil

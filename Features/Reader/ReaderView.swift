@@ -49,6 +49,7 @@ struct ReaderView: View {
                         autoPageTurnManager.handleTouch()
                         withAnimation { showUI.toggle() }
                     }
+                    .accessibilityIdentifier("reader.canvas")
                 }
 
                 if showUI {

@@ -3,6 +3,7 @@ import CoreData
 import BackgroundTasks
 import UIKit
 
+@MainActor
 final class RSSRefreshManager: NSObject {
     static let shared = RSSRefreshManager()
 
@@ -155,7 +156,7 @@ final class RSSRefreshManager: NSObject {
                 task.setTaskCompleted(success: false)
                 return
             }
-            self.handleBackgroundRefreshTask(refreshTask)
+            Task { @MainActor in self.handleBackgroundRefreshTask(refreshTask) }
         }
         
         if hasRegisteredBackgroundTask {
@@ -278,14 +279,15 @@ final class RSSRefreshManager: NSObject {
     private func refreshSource(with objectID: NSManagedObjectID) async {
         let context = CoreDataStack.shared.newBackgroundContext()
 
-        guard let source = try? context.existingObject(with: objectID) as? RssSource else {
+        guard let source = try? await context.perform({ try context.existingObject(with: objectID) as? RssSource }) else {
             return
         }
 
+        let sourceURL = (try? ManagedObjectAccess.read(source) { $0.sourceUrl }) ?? ""
         let refreshTime = Int64(Date().timeIntervalSince1970 * 1000)
 
         do {
-            let (feedTitle, articles) = try await RSSParser.fetchAndParse(url: source.sourceUrl, source: source)
+            let (feedTitle, articles) = try await RSSParser.fetchAndParse(url: sourceURL, source: source)
             let normalizedArticles = Self.normalize(articles)
 
             try await context.perform {
@@ -298,19 +300,21 @@ final class RSSRefreshManager: NSObject {
                 }
                 try context.save()
             }
+        } catch is CancellationError {
+            return
         } catch {
             do {
                 try await context.perform {
                     source.lastRefreshTime = refreshTime
                     source.lastUpdateTime = refreshTime
-                    source.refreshFailureCount += 1
+                    source.refreshFailureCount = min(source.refreshFailureCount, Int32.max - 1) + 1
                     try context.save()
                 }
             } catch {
                 DebugLogger.shared.log("写入 RSS 刷新失败状态异常: \(error.localizedDescription)")
             }
 
-            DebugLogger.shared.log("刷新 RSS 源失败: \(source.sourceUrl), error: \(error.localizedDescription)")
+            DebugLogger.shared.log("刷新 RSS 源失败: \(sourceURL), error: \(error.localizedDescription)")
         }
     }
 
@@ -322,7 +326,7 @@ final class RSSRefreshManager: NSObject {
         let pubDate: String?
     }
 
-    private static func normalize(_ articles: [RSSArticle]) -> [PersistArticle] {
+    nonisolated private static func normalize(_ articles: [RSSArticle]) -> [PersistArticle] {
         let formatter = ISO8601DateFormatter()
         return articles.enumerated().map { index, item in
             PersistArticle(
@@ -335,7 +339,7 @@ final class RSSRefreshManager: NSObject {
         }
     }
 
-    private static func upsertArticles(_ articles: [PersistArticle], source: RssSource, context: NSManagedObjectContext) {
+    nonisolated private static func upsertArticles(_ articles: [PersistArticle], source: RssSource, context: NSManagedObjectContext) {
         guard !articles.isEmpty else { return }
 
         let validLinks = articles.map(\.link).filter { !$0.isEmpty }
@@ -345,7 +349,7 @@ final class RSSRefreshManager: NSObject {
             let request: NSFetchRequest<RssArticle> = RssArticle.fetchRequest()
             request.predicate = NSPredicate(format: "origin == %@ AND link IN %@", source.sourceUrl, validLinks)
             if let existingArticles = try? context.fetch(request) {
-                existingByLink = Dictionary(uniqueKeysWithValues: existingArticles.map { ($0.link, $0) })
+                existingByLink = Dictionary(existingArticles.map { ($0.link, $0) }, uniquingKeysWith: { first, _ in first })
             }
         }
 

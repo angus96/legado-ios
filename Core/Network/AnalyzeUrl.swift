@@ -35,6 +35,7 @@ struct AnalyzedUrl {
     var webView: Bool = false
     var webJs: String?
     var sourceRegex: String?
+    var source: BookSourceSnapshot? = nil
 }
 
 // MARK: - AnalyzeUrl 主类
@@ -84,7 +85,7 @@ class AnalyzeUrl {
     private let speakText: String?
     private let speakSpeed: Int?
     private var baseUrl: String
-    private let source: BookSource?
+    private let source: BookSourceSnapshot?
     private let ruleData: AnyObject? // Book 或 BookChapter
     private let readTimeout: Int64?
     private let callTimeout: Int64?
@@ -112,7 +113,7 @@ class AnalyzeUrl {
         speakText: String? = nil,
         speakSpeed: Int? = nil,
         baseUrl: String = "",
-        source: BookSource? = nil,
+        source: BookSourceDefinition? = nil,
         ruleData: AnyObject? = nil,
         readTimeout: Int64? = nil,
         callTimeout: Int64? = nil,
@@ -126,6 +127,7 @@ class AnalyzeUrl {
         self.speakText = speakText
         self.speakSpeed = speakSpeed
         self.baseUrl = baseUrl
+        let source = source.flatMap { try? BookSourceSnapshot.capture($0) }
         self.source = source
         self.ruleData = ruleData
         self.readTimeout = readTimeout
@@ -665,8 +667,8 @@ class AnalyzeUrl {
         jsStr: String? = nil,
         sourceRegex: String? = nil,
         useWebView: Bool = true
-    ) -> StrResponse {
-        return waitForAsync {
+    ) throws -> StrResponse {
+        return try waitForAsync {
             try await self.getStrResponseAwait(jsStr: jsStr, sourceRegex: sourceRegex, useWebView: useWebView)
         }
     }
@@ -713,8 +715,8 @@ class AnalyzeUrl {
         return data
     }
 
-    func getByteArray() -> Data {
-        return waitForAsync { try await self.getByteArrayAwait() }
+    func getByteArray() throws -> Data {
+        return try waitForAsync { try await self.getByteArrayAwait() }
     }
 
     // MARK: - Cookie 管理
@@ -780,7 +782,7 @@ class AnalyzeUrl {
         var request = URLRequest(url: url)
         request.httpMethod = builder.method.rawValue
         if let timeout = callTimeout {
-            request.timeoutInterval = Double(timeout) / 1000.0
+            request.timeoutInterval = Double(min(300_000, max(1, timeout))) / 1000.0
         } else {
             request.timeoutInterval = 30
         }
@@ -802,19 +804,25 @@ class AnalyzeUrl {
 
         // 重试逻辑
         var lastError: Error?
-        for attempt in 0...max(0, retry) {
+        let retryCount = min(5, max(0, retry))
+        for attempt in 0...retryCount {
+            try Task.checkCancellation()
             do {
                 let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
+                    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "书源返回 HTTP \(status)"])
+                }
                 let encoding = Self.detectEncoding(data: data, response: response, charset: self.charset)
                 let bodyStr = String(data: data, encoding: encoding)
                     ?? String(data: data, encoding: .utf8)
                     ?? ""
 
-                let httpResponse = response as? HTTPURLResponse
                 return StrResponse(response: httpResponse, body: bodyStr)
             } catch {
                 lastError = error
-                if attempt < retry {
+                if Task.isCancelled { throw CancellationError() }
+                if attempt < retryCount {
                     try? await Task.sleep(nanoseconds: 500_000_000) // 500ms 重试间隔
                 }
             }
@@ -842,7 +850,7 @@ class AnalyzeUrl {
 
         var request = URLRequest(url: url)
         request.httpMethod = builder.method.rawValue
-        request.timeoutInterval = callTimeout.map { Double($0) / 1000.0 } ?? 30
+        request.timeoutInterval = callTimeout.map { Double(min(300_000, max(1, $0))) / 1000.0 } ?? 30
 
         for (k, v) in builder.headers {
             request.setValue(v, forHTTPHeaderField: k)
@@ -863,6 +871,9 @@ class AnalyzeUrl {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "书源返回 HTTP \(httpResponse.statusCode)"])
+        }
         return (data, httpResponse)
     }
 
@@ -874,7 +885,7 @@ class AnalyzeUrl {
         key: String? = nil,
         page: Int = 1,
         baseUrl: String? = nil,
-        source: BookSource? = nil
+        source: BookSourceDefinition? = nil
     ) -> AnalyzedUrl {
         let analyzer = AnalyzeUrl(
             mUrl: ruleUrl,
@@ -891,7 +902,8 @@ class AnalyzeUrl {
             charset: analyzer.charset,
             webView: analyzer.useWebView,
             webJs: analyzer.webJs,
-            sourceRegex: nil
+            sourceRegex: nil,
+            source: analyzer.source
         )
     }
 
@@ -903,7 +915,7 @@ class AnalyzeUrl {
         sourceRegex: String? = nil,
         forceWebView: Bool = false
     ) async throws -> (body: String, url: String) {
-        let analyzer = AnalyzeUrl(mUrl: analyzedUrl.url, source: nil)
+        let analyzer = AnalyzeUrl(mUrl: analyzedUrl.url, source: analyzedUrl.source)
         analyzer.headerMap = analyzedUrl.headers
         analyzer.method = analyzedUrl.method
         analyzer.body = analyzedUrl.body
@@ -1070,38 +1082,25 @@ class AnalyzeUrl {
     }
 
     /// 同步等待异步结果
-    private func waitForAsync<T>(_ block: @escaping () async throws -> T) -> T {
+    private func waitForAsync<T>(_ block: @escaping () async throws -> T) throws -> T {
+        guard !Thread.isMainThread else {
+            throw NSError(domain: "AnalyzeUrl", code: 1, userInfo: [NSLocalizedDescriptionKey: "同步网络接口不能在主线程调用"])
+        }
         let semaphore = DispatchSemaphore(value: 0)
-        // 使用 UnsafeMutablePointer 实现线程安全的值传递
-        let resultPointer = UnsafeMutablePointer<T?>.allocate(capacity: 1)
-        resultPointer.initialize(to: nil)
-        let errorPointer = UnsafeMutablePointer<Error?>.allocate(capacity: 1)
-        errorPointer.initialize(to: nil)
-
-        Task {
-            do {
-                resultPointer.pointee = try await block()
-            } catch let e {
-                errorPointer.pointee = e
-            }
+        let box = SynchronousResult<T>()
+        let task = Task.detached {
+            do { box.set(.success(try await block())) }
+            catch { box.set(.failure(error)) }
             semaphore.signal()
         }
-
-        semaphore.wait()
-        if let error = errorPointer.pointee {
-            resultPointer.deallocate()
-            errorPointer.deallocate()
-            fatalError("同步等待失败: \(error)")
+        guard semaphore.wait(timeout: .now() + .seconds(30)) == .success else {
+            task.cancel()
+            throw URLError(.timedOut)
         }
-        guard let value = resultPointer.pointee else {
-            resultPointer.deallocate()
-            errorPointer.deallocate()
-            fatalError("同步等待结果为空")
-        }
-        resultPointer.deallocate()
-        errorPointer.deallocate()
-        return value
+        guard let result = box.get() else { throw URLError(.unknown) }
+        return try result.get()
     }
+
 }
 
 // MARK: - UrlOption 结构体
@@ -1217,5 +1216,18 @@ struct AnyCodable: Codable {
             try container.encode(arr.map { AnyCodable($0) })
         default: try container.encodeNil()
         }
+    }
+}
+
+private final class SynchronousResult<Value> {
+    private let lock = NSLock()
+    private var result: Result<Value, Error>?
+    func set(_ value: Result<Value, Error>) {
+        lock.lock(); defer { lock.unlock() }
+        result = value
+    }
+    func get() -> Result<Value, Error>? {
+        lock.lock(); defer { lock.unlock() }
+        return result
     }
 }

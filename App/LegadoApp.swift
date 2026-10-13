@@ -9,6 +9,7 @@ import SwiftUI
 import CoreData
 
 @main
+@MainActor
 struct LegadoApp: App {
     @AppStorage("hasCompletedWelcome") private var hasCompletedWelcome = false
     
@@ -17,7 +18,11 @@ struct LegadoApp: App {
     @State private var unsupportedFileError = false
 
     init() {
+        #if DEBUG
+        StabilityTestBootstrap.prepareIfRequested()
+        #endif
         RSSRefreshManager.shared.registerBackgroundTaskIfNeeded()
+        _ = BackgroundCacheService.shared
     }
     
     var body: some Scene {

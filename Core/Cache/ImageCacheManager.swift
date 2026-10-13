@@ -145,7 +145,7 @@ class ImageCacheManager: ObservableObject {
         }
 
         let executionContext = ExecutionContext()
-        executionContext.source = source
+        executionContext.source = source.flatMap { try? BookSourceSnapshot.capture($0) }
         executionContext.baseURL = URL(string: source.bookSourceUrl)
         executionContext.jsContext.setObject(url, forKeyedSubscript: "src" as NSString)
         executionContext.jsContext.setObject(url, forKeyedSubscript: "result" as NSString)

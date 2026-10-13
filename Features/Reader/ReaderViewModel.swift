@@ -9,6 +9,7 @@ import Foundation
 import SwiftUI
 import CoreData
 
+@MainActor
 class ReaderViewModel: ObservableObject, ReadViewCallBack {
     private let readBook = ReadBook.shared
     
@@ -21,12 +22,19 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
         if let textChapter = curTextChapter {
             let pages = textChapter.pages
             totalPages = pages.count
+            currentChapterIndex = readBook.durChapterIndex
+            currentChapter = chapters[safe: currentChapterIndex]
+            if !pages.isEmpty {
+                currentPageIndex = min(max(0, readBook.durChapterPos), pages.count - 1)
+                durChapterPos = Int32(clamping: currentPageIndex)
+                chapterContent = textChapter.getContent()
+            }
         }
     }
     
     func upMenuView() {
         currentChapterIndex = readBook.durChapterIndex
-        durChapterPos = Int32(readBook.durChapterPos)
+        durChapterPos = Int32(clamping: readBook.durChapterPos)
     }
     
     func upPageAnim() {
@@ -100,6 +108,8 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     // MARK: - 私有属性
     private var ruleEngine: RuleEngine = RuleEngine()
     private var loadTask: Task<Void, Never>?
+    private var chapterLoadID = UUID()
+    private var bookLoadID = UUID()
     var cacheManager: ChapterCacheManager { ChapterCacheManager.shared }
 
     init() {
@@ -172,6 +182,9 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     // MARK: - 加载书籍
     func loadBook(byId bookId: UUID) {
         loadTask?.cancel()
+        let requestID = UUID()
+        bookLoadID = requestID
+        chapterLoadID = UUID()
         isLoading = true
         DebugLogger.shared.log("ReaderViewModel.loadBook 开始: bookId=\(bookId)")
 
@@ -180,7 +193,6 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
                 try Task.checkCancellation()
                 
                 let context = CoreDataStack.shared.viewContext
-                context.refreshAllObjects()
                 
                 let request: NSFetchRequest<Book> = Book.fetchRequest()
                 request.predicate = NSPredicate(format: "bookId == %@", bookId as CVarArg)
@@ -203,23 +215,27 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
                 readBook.resetData(book)
 
                 try await loadChapters(book: book)
+                guard !Task.isCancelled, bookLoadID == requestID else { return }
                 
-                let chapterIndex = Int(book.durChapterIndex)
-                if chapterIndex < chapters.count {
+                let chapterIndex = min(max(0, Int(book.durChapterIndex)), chapters.count - 1)
+                readBook.durChapterIndex = chapterIndex
+                if chapterIndex >= 0 && chapterIndex < chapters.count {
                     currentChapterIndex = chapterIndex
                     durChapterPos = book.durChapterPos
                     currentChapter = chapters[chapterIndex]
                     
                     try await loadChapter(at: chapterIndex, restorePageIndex: Int(book.durChapterPos))
                     
+                    guard !Task.isCancelled, bookLoadID == requestID else { return }
                     readBook.loadContent(resetPageOffset: false)
                 }
                 
-                isLoading = false
+                if bookLoadID == requestID { isLoading = false }
             } catch is CancellationError {
                 DebugLogger.shared.log("ReaderViewModel: 加载被取消")
-                isLoading = false
+                if bookLoadID == requestID { isLoading = false }
             } catch {
+                guard bookLoadID == requestID else { return }
                 DebugLogger.shared.log("ReaderViewModel: 加载失败 \(error.localizedDescription)")
                 errorMessage = "加载失败：\(error.localizedDescription)"
                 isLoading = false
@@ -232,6 +248,8 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     }
     
     func cleanup() {
+        bookLoadID = UUID()
+        chapterLoadID = UUID()
         loadTask?.cancel()
         loadTask = nil
         if readBook.callBack === self {
@@ -250,7 +268,6 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
         let request = BookChapter.fetchRequest(byBookId: book.bookId)
         
         let context = CoreDataStack.shared.viewContext
-        context.refreshAllObjects()
         var chapters = try context.fetch(request)
         
         DebugLogger.shared.log("loadChapters: 从 CoreData 获取到 \(chapters.count) 章")
@@ -259,37 +276,15 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
             if book.isLocal {
                 chapters = try await restoreLocalChaptersIfNeeded(for: book, preferredChapterIndex: Int(book.durChapterIndex))
             } else {
-                guard let sourceId = UUID(uuidString: book.origin) else {
-                    throw ReaderError.noSource
-                }
+                guard let source = try BookSourceResolver.resolve(for: book) else { throw ReaderError.noSource }
 
-                let sourceRequest: NSFetchRequest<BookSource> = BookSource.fetchRequest()
-                sourceRequest.fetchLimit = 1
-                sourceRequest.predicate = NSPredicate(format: "sourceId == %@", sourceId as CVarArg)
-                guard let source = try context.fetch(sourceRequest).first else {
-                    throw ReaderError.noSource
-                }
-
-                let webChapters = try await WebBook.getChapterList(source: source, book: book)
-                guard !webChapters.isEmpty else {
-                    throw ReaderError.noChapters
-                }
-
-                for web in webChapters {
-                    let chapter = BookChapter.create(
-                        in: context,
-                        bookId: book.bookId,
-                        url: web.url,
-                        index: Int32(web.index),
-                        title: web.title
-                    )
-                    chapter.book = book
-                    chapter.sourceId = source.sourceId.uuidString
-                    chapter.isVIP = web.isVip
-                }
-
-                book.totalChapterNum = Int32(webChapters.count)
-                try CoreDataStack.shared.save()
+                let original = try BookRequestSnapshot.capture(book)
+                let definition = try BookSourceSnapshot.capture(source)
+                let webChapters = try await WebBook.getChapterList(source: definition, book: original)
+                try Task.checkCancellation()
+                guard !webChapters.isEmpty else { throw ReaderError.noChapters }
+                try await ChapterDirectoryUpdater.replace(book: book, source: source, original: original,
+                                                          metadata: original, definition: definition, chapters: webChapters)
 
                 chapters = try context.fetch(request)
             }
@@ -297,6 +292,9 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
 
         self.chapters = chapters
         self.totalChapters = chapters.count
+        book.totalChapterNum = Int32(clamping: chapters.count)
+        readBook.chapterSize = chapters.count
+        readBook.simulatedChapterSize = chapters.count
 
         if chapters.isEmpty {
             throw ReaderError.noChapters
@@ -309,19 +307,27 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
             throw ReaderError.invalidChapterIndex
         }
         
+        let chapter = chapters[index]
+        let bookID = currentBook?.objectID
+        let requestID = UUID()
+        chapterLoadID = requestID
+        func validateRequest() throws {
+            guard !Task.isCancelled, chapterLoadID == requestID,
+                  currentBook?.objectID == bookID, !chapter.isDeleted else { throw CancellationError() }
+        }
         isLoading = true
         currentChapterIndex = index
-        currentChapter = chapters[index]
+        currentChapter = chapter
         if let restorePageIndex {
             currentPageIndex = max(0, restorePageIndex)
-            durChapterPos = Int32(currentPageIndex)
+            durChapterPos = Int32(clamping: currentPageIndex)
         } else {
             currentPageIndex = 0
             durChapterPos = 0
         }
         
         do {
-            DebugLogger.shared.log("loadChapter: index=\(index), chapterId=\(chapters[index].chapterId), isCached=\(chapters[index].isCached), cachePath=\(chapters[index].cachePath ?? "nil")")
+            DebugLogger.shared.log("loadChapter: index=\(index), chapterId=\(chapter.chapterId), isCached=\(chapter.isCached), cachePath=\(chapter.cachePath ?? "nil")")
             
             if let book = currentBook {
                 DebugLogger.shared.log("loadChapter: book.type=\(book.type), bookUrl=\(book.bookUrl), folderName=\(book.folderName ?? "nil")")
@@ -329,7 +335,7 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
             
             if let book = currentBook, (book.type == 1 || book.bookUrl.lowercased().hasSuffix(".epub")),
                let epubDirPath = book.folderName, !epubDirPath.isEmpty,
-               let htmlPath = chapters[index].cachePath, !htmlPath.isEmpty {
+               let htmlPath = chapter.cachePath, !htmlPath.isEmpty {
                 
                 let epubDir = URL(fileURLWithPath: epubDirPath)
                 let htmlURL = epubDir.appendingPathComponent(htmlPath)
@@ -340,7 +346,7 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
                     DebugLogger.shared.log("loadChapter: EPUB 提取文本 path=\(htmlURL.path)")
                     let htmlContent = try String(contentsOf: htmlURL, encoding: .utf8)
                     let textContent = HTMLToTextConverter.convert(html: htmlContent, baseURL: epubDir)
-                    chapterContent = applyReplaceRulesIfNeeded(textContent, chapter: chapters[index])
+                    chapterContent = applyReplaceRulesIfNeeded(textContent, chapter: chapter)
                     chapterContentHTML = htmlContent
                     chapterHTMLURL = htmlURL
                     epubBaseURL = epubDir
@@ -350,27 +356,29 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
             }
             
             // 尝试从缓存加载
-            if let cachedContent = try? await loadCachedChapter(chapters[index]) {
+            if let cachedContent = try? await loadCachedChapter(chapter) {
+                try validateRequest()
                 DebugLogger.shared.log("loadChapter: 从缓存加载成功，长度=\(cachedContent.count)")
-                chapterContent = applyReplaceRulesIfNeeded(cachedContent, chapter: chapters[index])
+                chapterContent = applyReplaceRulesIfNeeded(cachedContent, chapter: chapter)
                 chapterContentHTML = nil
                 isLoading = false
                 return
             }
             
             DebugLogger.shared.log("loadChapter: 缓存未命中，尝试 fetchChapterContent")
-            let content = try await fetchChapterContent(chapters[index])
+            let content = try await fetchChapterContent(chapter)
+            try validateRequest()
 
             if let book = currentBook, book.isLocal {
-                chapterContent = applyReplaceRulesIfNeeded(content, chapter: chapters[index])
+                chapterContent = applyReplaceRulesIfNeeded(content, chapter: chapter)
                 chapterContentHTML = nil
                 chapterHTMLURL = nil
                 epubBaseURL = nil
             } else {
                 chapterContentHTML = content
                 let textContent = HTMLToTextConverter.convert(html: content, baseURL: nil)
-                chapterContent = applyReplaceRulesIfNeeded(textContent, chapter: chapters[index])
-                try await cacheChapter(chapters[index], content: textContent)
+                chapterContent = applyReplaceRulesIfNeeded(textContent, chapter: chapter)
+                try await cacheChapter(chapter, content: textContent)
             }
             
             isLoading = false
@@ -383,7 +391,11 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
                     book: book
                 )
             }
+        } catch is CancellationError {
+            if chapterLoadID == requestID { isLoading = false }
+            throw CancellationError()
         } catch {
+            guard chapterLoadID == requestID else { throw error }
             errorMessage = "加载章节失败：\(error.localizedDescription)"
             isLoading = false
             throw error
@@ -410,10 +422,13 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     func jumpToChapter(_ index: Int) {
         guard index >= 0 && index < totalChapters else { return }
         
-        Task {
-            try? await loadChapter(at: index)
-            saveProgress()
-        }
+        readBook.durChapterIndex = index
+        readBook.durChapterPos = 0
+        readBook.clearTextChapter()
+        readBook.loadContent()
+        currentChapterIndex = index
+        currentChapter = chapters[index]
+        saveProgress()
     }
 
     func loadChapter() async {
@@ -536,7 +551,7 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
 
     private func updatePagingProgressIfNeeded() {
         let clamped = max(0, currentPageIndex)
-        let newPos = Int32(clamped)
+        let newPos = Int32(clamping: clamped)
         if durChapterPos != newPos {
             durChapterPos = newPos
         }
@@ -596,22 +611,9 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
             return try await loadLocalChapterContent(chapter)
         }
         
-        // 网络书籍：通过 WebBook 从书源获取
-        guard let sourceId = UUID(uuidString: book.origin) else {
-            throw ReaderError.noSource
-        }
-        
-        // 查找对应书源
-        let request: NSFetchRequest<BookSource> = BookSource.fetchRequest()
-        request.predicate = NSPredicate(format: "sourceId == %@", sourceId as CVarArg)
-        
-        guard let source = try? CoreDataStack.shared.viewContext.fetch(request).first else {
-            throw ReaderError.noSource
-        }
-        
-        return try await WebBook.getContent(source: source, book: book, chapter: chapter)
+        return try await ChapterContentLoader.load(chapter: chapter, book: book)
     }
-    
+
     /// 加载本地 TXT 书籍的章节内容
     private func loadLocalChapterContent(_ chapter: BookChapter) async throws -> String {
         guard let book = currentBook else { throw ReaderError.noBook }
@@ -890,7 +892,7 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     func saveProgress() {
         guard let book = currentBook else { return }
         
-        book.durChapterIndex = Int32(currentChapterIndex)
+        book.durChapterIndex = Int32(clamping: max(0, currentChapterIndex))
         book.durChapterTime = Int64(Date().timeIntervalSince1970)
         book.durChapterPos = durChapterPos
         

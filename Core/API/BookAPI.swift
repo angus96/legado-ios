@@ -97,8 +97,8 @@ struct BookAPI {
                 return .error("未找到书籍")
             }
             
-            book.durChapterIndex = Int32(progress.durChapterIndex)
-            book.durChapterPos = Int32(progress.durChapterPos)
+            book.durChapterIndex = Int32(clamping: max(0, progress.durChapterIndex))
+            book.durChapterPos = Int32(clamping: max(0, progress.durChapterPos))
             book.durChapterTitle = progress.durChapterTitle
             book.durChapterTime = Int64(progress.durChapterTime)
             
@@ -190,7 +190,7 @@ struct BookAPI {
             return .error("书籍无书源")
         }
         
-        Task {
+        Task { @MainActor in
             do {
                 let service = TableOfContentsService.shared
                 let chapters = try await service.refreshTableOfContents(book: book, source: source)
@@ -292,17 +292,17 @@ struct BookAPI {
         book.coverUrl = json.coverUrl ?? ""
         book.customCoverUrl = json.customCover ?? ""
         book.group = Int64(json.group ?? 0)
-        book.durChapterIndex = Int32(json.durChapterIndex ?? 0)
-        book.durChapterPos = Int32(json.durChapterPos ?? 0)
+        book.durChapterIndex = Int32(clamping: json.durChapterIndex ?? 0)
+        book.durChapterPos = Int32(clamping: json.durChapterPos ?? 0)
         book.durChapterTitle = json.durChapterTitle ?? ""
         book.durChapterTime = Int64(json.durChapterTime ?? 0)
         book.latestChapterTitle = json.latestChapterTitle ?? ""
         book.latestChapterTime = Int64(json.latestChapterTime ?? 0)
-        book.totalChapterNum = Int32(json.totalChapterNum ?? 0)
+        book.totalChapterNum = Int32(clamping: json.totalChapterNum ?? 0)
         book.origin = json.origin ?? ""
         book.originName = json.originName ?? ""
         book.canUpdate = json.canUpdate ?? true
-        book.order = Int32(json.order ?? 0)
+        book.order = Int32(clamping: json.order ?? 0)
     }
 }
 

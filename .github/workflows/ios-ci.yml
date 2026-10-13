@@ -27,7 +27,10 @@ jobs:
       run: python3 scripts/verify_javascript_bridge.py
 
     - name: Verify HTML and JSON Rule Engine
-      run: python3 scripts/verify_rule_engine.py
+      run: python3 scripts/verify_rule_engine.py --build-dir "$RUNNER_TEMP/legado-rules"
+
+    - name: Verify HTTP and Database Pipeline
+      run: python3 scripts/verify_domain_pipeline.py --libraries "$RUNNER_TEMP/legado-rules"
     
     - name: Install xcodeproj gem
       run: gem install xcodeproj
@@ -69,18 +72,11 @@ jobs:
           CODE_SIGNING_REQUIRED=NO \
           IPHONEOS_DEPLOYMENT_TARGET=16.0
 
-    - name: Check Unit Test Target
-      id: test_target
+    - name: Run iOS Stability and UI Tests
       run: |
-        if grep -q "com.apple.product-type.bundle.unit-test" Legado.xcodeproj/project.pbxproj; then
-          echo "has_tests=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "has_tests=false" >> "$GITHUB_OUTPUT"
-        fi
-    
-    - name: Run Unit Tests
-      if: ${{ success() && steps.test_target.outputs.has_tests == 'true' }}
-      run: |
+        python3 scripts/serve_stability_fixtures.py > "$RUNNER_TEMP/fixture-server.log" 2>&1 &
+        FIXTURE_SERVER_PID=$!
+        trap 'kill "$FIXTURE_SERVER_PID" || true' EXIT
         xcodebuild test \
           -project Legado.xcodeproj \
           -scheme Legado \
@@ -88,7 +84,9 @@ jobs:
           -configuration Debug \
           -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' \
           -derivedDataPath "$DERIVED_DATA" \
-          -resultBundlePath "$RESULT_BUNDLE" \
+          -resultBundlePath "$RUNNER_TEMP/LegadoTests.xcresult" \
+          -parallel-testing-enabled NO \
+          CODE_SIGNING_ALLOWED=NO \
           ONLY_ACTIVE_ARCH=YES \
           IPHONEOS_DEPLOYMENT_TARGET=16.0
 
@@ -108,7 +106,9 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Legado-xcresult
-        path: ${{ env.RESULT_BUNDLE }}
+        path: |
+          ${{ env.RESULT_BUNDLE }}
+          ${{ runner.temp }}/LegadoTests.xcresult
         if-no-files-found: ignore
     
     - name: Upload Build Artifact

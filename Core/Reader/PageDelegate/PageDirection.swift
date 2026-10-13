@@ -29,6 +29,7 @@ protocol PageViewProtocol: AnyObject {
 
 /// 阅读视图协议
 /// 一比一移植自 Android Legado ReadView 功能
+@MainActor
 protocol ReadViewProtocol: AnyObject {
     var width: CGFloat { get }
     var height: CGFloat { get }

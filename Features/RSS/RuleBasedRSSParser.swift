@@ -8,17 +8,18 @@ final class RuleBasedRSSParser {
         self.ruleEngine = ruleEngine
     }
 
-    static func shouldUseRuleParsing(source: RssSource) -> Bool {
-        guard let rule = source.ruleArticles else { return false }
+    static func shouldUseRuleParsing(source: RssSourceDefinition) -> Bool {
+        guard let rule = try? RssSourceSnapshot.capture(source).ruleArticles else { return false }
         return !rule.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    func parse(data: Data, source: RssSource, sourceUrl: String) throws -> [RSSArticle] {
+    func parse(data: Data, source: RssSourceDefinition, sourceUrl: String) throws -> [RSSArticle] {
         let body = decodeBody(from: data)
         return try parse(body: body, source: source, sourceUrl: sourceUrl)
     }
 
-    func parse(body: String, source: RssSource, sourceUrl: String) throws -> [RSSArticle] {
+    func parse(body: String, source: RssSourceDefinition, sourceUrl: String) throws -> [RSSArticle] {
+        let source = try RssSourceSnapshot.capture(source)
         let elements = try ruleEngine.getElements(
             ruleStr: source.ruleArticles,
             body: body,

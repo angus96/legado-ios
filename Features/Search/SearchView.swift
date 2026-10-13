@@ -53,6 +53,7 @@ struct SearchView: View {
                 .foregroundColor(.secondary)
             
             TextField("搜索", text: $viewModel.searchText)
+                .accessibilityIdentifier("search.keyword")
                 .textFieldStyle(.plain)
                 .focused($isSearchFocused)
                 .submitLabel(.search)

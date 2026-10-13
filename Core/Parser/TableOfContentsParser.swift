@@ -184,128 +184,28 @@ class TableOfContentsParser {
 }
 
 // MARK: - 目录获取服务
-class TableOfContentsService {
-    
+@MainActor
+final class TableOfContentsService {
     static let shared = TableOfContentsService()
-    
-    /// 获取书籍目录
+
     func fetchTableOfContents(book: Book, source: BookSource) async throws -> [BookChapter] {
-        // 1. 检查本地缓存
-        let cachedChapters = try await loadCachedChapters(book: book)
-        if !cachedChapters.isEmpty {
-            return cachedChapters
-        }
-        
-        // 2. 从书源获取
-        let tocURL = book.tocUrl
-        guard let ruleTocData = source.ruleTocData,
-              let ruleToc = try? JSONDecoder().decode(RuleToc.self, from: ruleTocData) else {
-            throw ReaderError.noSource
-        }
-        
-        // 3. 解析目录页面
-        let chapters = try await parseTOCPage(url: tocURL, ruleToc: ruleToc, source: source)
-        
-        // 4. 保存到 CoreData
-        try await saveChapters(chapters, book: book)
-        
-        // 5. 返回保存后的章节
-        return try await loadCachedChapters(book: book)
+        let cached = try loadCachedChapters(book: book)
+        if !cached.isEmpty { return cached }
+        return try await refreshTableOfContents(book: book, source: source)
     }
-    
-    /// 解析目录页面（支持分页）
-    private func parseTOCPage(url: String, ruleToc: RuleToc, source: BookSource, accumulated: [TableOfContentsParser.ChapterInfo] = []) async throws -> [TableOfContentsParser.ChapterInfo] {
-        guard let tocURL = URL(string: url) else {
-            throw ReaderError.networkFailure
-        }
-        
-        // 下载页面
-        let (data, _) = try await URLSession.shared.data(from: tocURL)
-        guard let html = String(data: data, encoding: .utf8) else {
-            throw ReaderError.parseFailed("无法解码页面")
-        }
-        
-        // 解析当前页目录
-        var chapters = try await TableOfContentsParser.parse(from: html, ruleToc: ruleToc)
-        
-        // 合并之前页的结果
-        let startIndex = accumulated.count
-        chapters = chapters.map { chapterInfo in
-            TableOfContentsParser.ChapterInfo(
-                title: chapterInfo.title,
-                url: chapterInfo.url,
-                index: chapterInfo.index + startIndex
-            )
-        }
-        
-        var allChapters = accumulated + chapters
-        
-        // 检查是否有下一页
-        if let nextPageURL = TableOfContentsParser.parseNextPageURL(from: html, rule: ruleToc, baseURL: url) {
-            // 递归获取下一页
-            allChapters = try await parseTOCPage(
-                url: nextPageURL,
-                ruleToc: ruleToc,
-                source: source,
-                accumulated: allChapters
-            )
-        }
-        
-        return allChapters
-    }
-    
-    /// 加载本地缓存的目录
-    private func loadCachedChapters(book: Book) async throws -> [BookChapter] {
-        let request: NSFetchRequest<BookChapter> = BookChapter.fetchRequest()
-        request.predicate = NSPredicate(format: "bookId == %@", book.bookId as CVarArg)
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \BookChapter.index, ascending: true)]
-        
-        return try CoreDataStack.shared.viewContext.fetch(request)
-    }
-    
-    /// 保存章节到 CoreData
-    private func saveChapters(_ chapters: [TableOfContentsParser.ChapterInfo], book: Book) async throws {
-        let context = CoreDataStack.shared.viewContext
-        
-        // 删除旧章节
-        let request: NSFetchRequest<BookChapter> = BookChapter.fetchRequest()
-        request.predicate = NSPredicate(format: "bookId == %@", book.bookId as CVarArg)
-        let oldChapters = try context.fetch(request)
-        oldChapters.forEach { context.delete($0) }
-        
-        // 创建新章节
-        for info in chapters {
-            let chapter = BookChapter(context: context)
-            chapter.chapterId = UUID()
-            chapter.bookId = book.bookId
-            chapter.index = Int32(info.index)
-            chapter.title = info.title
-            chapter.chapterUrl = info.url
-            chapter.isVIP = false
-            chapter.isPay = false
-            chapter.wordCount = 0
-            chapter.updateTime = 0
-            chapter.isCached = false
-        }
-        
-        // 更新书籍信息
-        book.totalChapterNum = Int32(chapters.count)
-        book.tocUrl = chapters.first?.url ?? book.tocUrl
-        
-        try CoreDataStack.shared.save()
-    }
-    
-    /// 刷新目录
+
     func refreshTableOfContents(book: Book, source: BookSource) async throws -> [BookChapter] {
-        // 清除缓存
-        let request: NSFetchRequest<BookChapter> = BookChapter.fetchRequest()
-        request.predicate = NSPredicate(format: "bookId == %@", book.bookId as CVarArg)
-        let chapters = try CoreDataStack.shared.viewContext.fetch(request)
-        chapters.forEach { CoreDataStack.shared.viewContext.delete($0) }
-        try CoreDataStack.shared.save()
-        
-        // 重新获取
-        return try await fetchTableOfContents(book: book, source: source)
+        let original = try BookRequestSnapshot.capture(book)
+        let definition = try BookSourceSnapshot.capture(source)
+        let chapters = try await WebBook.getChapterList(source: definition, book: original)
+        try Task.checkCancellation()
+        try await ChapterDirectoryUpdater.replace(book: book, source: source, original: original,
+                                                  metadata: original, definition: definition, chapters: chapters)
+        return try loadCachedChapters(book: book)
+    }
+
+    private func loadCachedChapters(book: Book) throws -> [BookChapter] {
+        guard let context = book.managedObjectContext else { throw ManagedObjectAccessError.unavailable }
+        return try context.performAndWait { try context.fetch(BookChapter.fetchRequest(byBookId: book.bookId)) }
     }
 }
-

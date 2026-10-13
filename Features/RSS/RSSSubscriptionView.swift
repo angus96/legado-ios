@@ -463,6 +463,7 @@ class RSSParser {
     }
 
     static func fetchAndParse(url: String, source: RssSource?) async throws -> (String, [RSSArticle]) {
+        let source = try source.map { try RssSourceSnapshot.capture($0) }
         guard let feedUrl = URL(string: url) else {
             throw URLError(.badURL)
         }
@@ -471,7 +472,11 @@ class RSSParser {
         request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 15
         
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
 
         if let source, RuleBasedRSSParser.shouldUseRuleParsing(source: source) {
             let parser = RuleBasedRSSParser()

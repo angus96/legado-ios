@@ -600,6 +600,7 @@ class TextChapterLayout {
         textPage.upRenderHeight()
         
         textPages.append(textPage)
+        textChapter.appendPage(textPage)
         pageStreamContinuation?.yield(textPage)
         
         listener?.onLayoutPageCompleted(textPages.count - 1, page: textPage)
@@ -607,6 +608,7 @@ class TextChapterLayout {
     
     private func onCompleted() {
         isCompleted = true
+        textChapter?.isCompleted = true
         pageStreamContinuation?.finish()
         listener?.onLayoutCompleted()
         listener = nil

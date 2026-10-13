@@ -32,6 +32,7 @@ struct BookshelfView: View {
                     Button(action: { showingSearch = true }) {
                         Image(systemName: "magnifyingglass")
                     }
+                    .accessibilityIdentifier("bookshelf.search")
                     
                     Menu {
                         Button(action: importLocalBook) {

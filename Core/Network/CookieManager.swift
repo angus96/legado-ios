@@ -14,10 +14,13 @@ import CoreData
 final class CookieManager {
     static let shared = CookieManager()
     
-    private let sessionCookieStorage = HTTPCookieStorage.shared
-    private var coreDataStack: CoreDataStack { .shared }
+    private let sessionCookieStorage: HTTPCookieStorage
+    private let storageContext: NSManagedObjectContext
     
-    private init() {}
+    init(stack: CoreDataStack = .shared, cookieStorage: HTTPCookieStorage = .shared) {
+        sessionCookieStorage = cookieStorage
+        storageContext = stack.newBackgroundContext()
+    }
     
     // MARK: - 存储 Cookie
     
@@ -26,61 +29,72 @@ final class CookieManager {
     ///   - url: 关联的 URL（通常是书源地址）
     ///   - cookieString: Cookie 字符串（如 "key1=value1; key2=value2"）
     func saveCookie(url: String, cookieString: String) {
-        let context = coreDataStack.viewContext
+        let context = storageContext
         
         // 检查是否已存在
         let fetchRequest: NSFetchRequest<Cookie> = Cookie.fetchRequest()
         fetchRequest.predicate = NSPredicate(format: "url == %@", url)
         
         do {
-            let existing = try context.fetch(fetchRequest).first
+            try context.performAndWait {
+                let existing = try context.fetch(fetchRequest).first
             
             if let existing = existing {
                 existing.cookie = cookieString
             } else {
-                Cookie.create(in: context, url: url, cookie: cookieString)
+                _ = Cookie.create(in: context, url: url, cookie: cookieString)
             }
             
             try context.save()
-            
-            // 同时更新 HTTPCookieStorage
             updateSessionCookies(url: url, cookieString: cookieString)
+            }
             
         } catch {
+            context.performAndWait { context.rollback() }
             DebugLogger.shared.log("保存 Cookie 失败: \(error)")
         }
     }
     
     /// 从 HTTPURLResponse 提取并保存 Cookie
     func saveCookies(from response: HTTPURLResponse, for url: URL) {
-        guard let headerFields = response.allHeaderFields as? [String: String],
-              let cookieHeader = headerFields["Set-Cookie"] else {
-            return
+        let headerFields = response.allHeaderFields.reduce(into: [String: String]()) { headers, field in
+            headers[String(describing: field.key)] = String(describing: field.value)
         }
-        
-        // 解析 Cookie
-        let cookies = HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": cookieHeader], for: url)
-        
-        // 构建Cookie字符串
-        let cookieString = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
-        
-        // 保存到数据库（以域名作为 key）
+        let cookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: url)
+        guard !cookies.isEmpty else { return }
         let hostKey = url.host ?? url.absoluteString
-        saveCookie(url: hostKey, cookieString: cookieString)
+        do {
+            try storageContext.performAndWait {
+                sessionCookieStorage.setCookies(cookies, for: url, mainDocumentURL: nil)
+                let cookieString = (sessionCookieStorage.cookies(for: url) ?? [])
+                    .map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+                let request = Cookie.fetchRequest()
+                request.predicate = NSPredicate(format: "url == %@", hostKey)
+                if let existing = try storageContext.fetch(request).first {
+                    existing.cookie = cookieString
+                } else {
+                    _ = Cookie.create(in: storageContext, url: hostKey, cookie: cookieString)
+                }
+                try storageContext.save()
+            }
+        } catch {
+            storageContext.performAndWait { storageContext.rollback() }
+            DebugLogger.shared.log("保存响应 Cookie 失败: \(error)")
+        }
     }
     
     // MARK: - 读取 Cookie
     
     /// 获取指定 URL 的 Cookie
     func getCookie(for url: String) -> String? {
-        let context = coreDataStack.viewContext
+        let context = storageContext
         
         let fetchRequest: NSFetchRequest<Cookie> = Cookie.fetchRequest()
         fetchRequest.predicate = NSPredicate(format: "url == %@", url)
         fetchRequest.fetchLimit = 1
         
         do {
-            return try context.fetch(fetchRequest).first?.cookie
+            return try context.performAndWait { try context.fetch(fetchRequest).first?.cookie }
         } catch {
             DebugLogger.shared.log("读取 Cookie 失败: \(error)")
             return nil
@@ -89,13 +103,15 @@ final class CookieManager {
     
     /// 获取所有 Cookie
     func getAllCookies() -> [(url: String, cookie: String)] {
-        let context = coreDataStack.viewContext
+        let context = storageContext
         
         let fetchRequest: NSFetchRequest<Cookie> = Cookie.fetchRequest()
         
         do {
-            let cookies = try context.fetch(fetchRequest)
-            return cookies.map { ($0.url, $0.cookie) }
+            return try context.performAndWait {
+                let cookies = try context.fetch(fetchRequest)
+                return cookies.map { ($0.url, $0.cookie) }
+            }
         } catch {
             DebugLogger.shared.log("读取所有 Cookie 失败: \(error)")
             return []
@@ -125,15 +141,20 @@ final class CookieManager {
     
     /// 删除指定 URL 的 Cookie
     func deleteCookie(for url: String) {
-        let context = coreDataStack.viewContext
+        let context = storageContext
         
         let fetchRequest: NSFetchRequest<Cookie> = Cookie.fetchRequest()
         fetchRequest.predicate = NSPredicate(format: "url == %@", url)
         
         do {
-            let cookies = try context.fetch(fetchRequest)
-            cookies.forEach { context.delete($0) }
-            try context.save()
+            try context.performAndWait {
+                let cookies = try context.fetch(fetchRequest)
+                cookies.forEach { context.delete($0) }
+                try context.save()
+                let host = URL(string: url)?.host ?? url
+                sessionCookieStorage.cookies?.filter { $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == host }
+                    .forEach { sessionCookieStorage.deleteCookie($0) }
+            }
         } catch {
             DebugLogger.shared.log("删除 Cookie 失败: \(error)")
         }
@@ -141,18 +162,17 @@ final class CookieManager {
     
     /// 清空所有 Cookie
     func clearAllCookies() {
-        let context = coreDataStack.viewContext
+        let context = storageContext
         
-        let fetchRequest: NSFetchRequest<NSFetchRequestResult> = Cookie.fetchRequest()
-        let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
+        let fetchRequest = Cookie.fetchRequest()
         
         do {
-            try context.execute(deleteRequest)
-            try context.save()
-            
-            // 清空 session storage
-            if let cookies = sessionCookieStorage.cookies {
-                cookies.forEach { sessionCookieStorage.deleteCookie($0) }
+            try context.performAndWait {
+                try context.fetch(fetchRequest).forEach { context.delete($0) }
+                try context.save()
+                if let cookies = sessionCookieStorage.cookies {
+                    cookies.forEach { sessionCookieStorage.deleteCookie($0) }
+                }
             }
         } catch {
             DebugLogger.shared.log("清空 Cookie 失败: \(error)")
@@ -162,7 +182,8 @@ final class CookieManager {
     // MARK: - Private
     
     private func updateSessionCookies(url: String, cookieString: String) {
-        guard let baseURL = URL(string: "https://\(url)") else { return }
+        let domain = URL(string: url)?.host ?? url
+        guard !domain.isEmpty else { return }
         
         // 解析 Cookie 字符串
         let cookiePairs = cookieString.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
@@ -177,7 +198,7 @@ final class CookieManager {
             let cookie = HTTPCookie(properties: [
                 .name: name,
                 .value: value,
-                .domain: url,
+                .domain: domain,
                 .path: "/",
                 .secure: "FALSE"
             ])

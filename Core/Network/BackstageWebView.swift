@@ -138,9 +138,13 @@ class BackstageWebView {
     /// 获取 StrResponse（对应 Android getStrResponse）
     @MainActor
     func getStrResponse() async throws -> StrResponse {
-        let effectiveTimeout = timeout ?? 60000
+        let effectiveTimeout = min(300_000, max(1, timeout ?? 60000))
+        let requestState = WebViewRequestState()
+        defer { requestState.handler = nil }
 
-        return try await withCheckedThrowingContinuation { continuation in
+        return try await withTaskCancellationHandler(operation: {
+          try Task.checkCancellation()
+          return try await withCheckedThrowingContinuation { continuation in
             let handler = WebViewHandler(
                 url: url,
                 html: html,
@@ -150,16 +154,23 @@ class BackstageWebView {
                 sourceRegex: sourceRegex,
                 overrideUrlRegex: overrideUrlRegex,
                 javaScript: javaScript ?? Self.defaultJS,
-                delayTime: delayTime,
+                delayTime: min(60_000, max(0, delayTime)),
                 cacheFirst: cacheFirst,
                 result: result,
                 isRule: isRule,
                 timeout: effectiveTimeout,
                 continuation: continuation
             )
+            requestState.handler = handler
             handler.start()
-        }
+          }
+        }, onCancel: { Task { @MainActor in requestState.handler?.cancel() } })
     }
+}
+
+@MainActor
+private final class WebViewRequestState {
+    var handler: WebViewHandler?
 }
 
 // MARK: - WebView 事件处理器
@@ -248,8 +259,12 @@ private class WebViewHandler: NSObject, WKNavigationDelegate {
             let baseURL = url.flatMap { URL(string: $0) }
             webView.loadHTMLString(html, baseURL: baseURL)
         } else if let url = url, !url.isEmpty {
+            guard let urlObject = URL(string: url), urlObject.host != nil else {
+                finishWithError(URLError(.badURL))
+                return
+            }
             if let headerMap = headerMap, !headerMap.isEmpty {
-                var request = URLRequest(url: URL(string: url) ?? URL(string: "http://localhost/")!)
+                var request = URLRequest(url: urlObject)
                 for (key, value) in headerMap {
                     request.setValue(value, forHTTPHeaderField: key)
                 }
@@ -259,6 +274,9 @@ private class WebViewHandler: NSObject, WKNavigationDelegate {
                     webView.load(URLRequest(url: urlObj))
                 }
             }
+        } else {
+            finishWithError(URLError(.badURL))
+            return
         }
 
         // 超时计时器
@@ -299,7 +317,10 @@ private class WebViewHandler: NSObject, WKNavigationDelegate {
             // 注入 result 变量
             if let result = self.result, !result.isEmpty {
                 CacheStore.put("webview_result", value: result)
-                webView.evaluateJavaScript("window.result = \"\(result.replacingOccurrences(of: "\"", with: "\\\""))\"") { _, _ in }
+                if let data = try? JSONSerialization.data(withJSONObject: result, options: .fragmentsAllowed),
+                   let literal = String(data: data, encoding: .utf8) {
+                    webView.evaluateJavaScript("window.result = \(literal)") { _, _ in }
+                }
             }
 
             // 延迟后执行 JS 求值
@@ -381,6 +402,8 @@ private class WebViewHandler: NSObject, WKNavigationDelegate {
 
     // MARK: - 完成
 
+    func cancel() { finishWithError(CancellationError()) }
+
     private func finishWithResult(url: String, body: String) {
         guard !completed else { return }
         completed = true
@@ -419,7 +442,12 @@ private class WebViewHandler: NSObject, WKNavigationDelegate {
     private func setCookieFromWebView(_ webView: WKWebView) {
         guard let tag = tag, !tag.isEmpty else { return }
         webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-            let cookieStr = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+            let host = URL(string: tag)?.host ?? tag
+            let matching = cookies.filter {
+                let domain = $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                return host == domain || host.hasSuffix("." + domain)
+            }
+            let cookieStr = matching.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
             if !cookieStr.isEmpty {
                 CookieManager.shared.saveCookie(url: tag, cookieString: cookieStr)
             }

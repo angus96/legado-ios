@@ -9,6 +9,7 @@ struct ProcessedContent {
     let effectiveReplaceRules: [ReplaceRule]?
 }
 
+@MainActor
 class ContentProcessor {
     
     private static var processors: [String: WeakReference<ContentProcessor>] = [:]
@@ -60,11 +61,11 @@ class ContentProcessor {
         let context = CoreDataStack.shared.viewContext
         
         let titleRequest: NSFetchRequest<ReplaceRule> = ReplaceRule.fetchRequest()
-        titleRequest.predicate = NSPredicate(format: "isEnabled == YES AND (scope IS NULL OR scope == '' OR scope CONTAINS[cd] %@ OR scope CONTAINS[cd] %@)", bookName, bookOrigin)
+        titleRequest.predicate = NSPredicate(format: "enabled == YES AND (scope IS NULL OR scope == '' OR scope CONTAINS[cd] %@ OR scope CONTAINS[cd] %@)", bookName, bookOrigin)
         titleReplaceRules = (try? context.fetch(titleRequest)) ?? []
         
         let contentRequest: NSFetchRequest<ReplaceRule> = ReplaceRule.fetchRequest()
-        contentRequest.predicate = NSPredicate(format: "isEnabled == YES AND (scope IS NIL OR scope == '' OR scope CONTAINS[cd] %@ OR scope CONTAINS[cd] %@)", bookName, bookOrigin)
+        contentRequest.predicate = NSPredicate(format: "enabled == YES AND (scope IS NIL OR scope == '' OR scope CONTAINS[cd] %@ OR scope CONTAINS[cd] %@)", bookName, bookOrigin)
         contentReplaceRules = (try? context.fetch(contentRequest)) ?? []
     }
     

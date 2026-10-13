@@ -258,8 +258,8 @@ final class RssRuleParser {
     }
     
     /// 判断是否应使用规则解析 — 对标 Android RssParserByRule 判断 ruleArticles 是否为空
-    static func shouldUseRuleParsing(source: RssSource) -> Bool {
-        guard let rule = source.ruleArticles else { return false }
+    static func shouldUseRuleParsing(source: RssSourceDefinition) -> Bool {
+        guard let rule = try? RssSourceSnapshot.capture(source).ruleArticles else { return false }
         return !rule.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     
@@ -268,8 +268,9 @@ final class RssRuleParser {
         body: String,
         sortName: String,
         sortUrl: String,
-        source: RssSource
+        source: RssSourceDefinition
     ) -> (items: [RssParseItem], nextUrl: String?) {
+        guard let source = try? RssSourceSnapshot.capture(source) else { return ([], nil) }
         var ruleArticles = source.ruleArticles ?? ""
         var nextUrl: String?
         var reverse = false

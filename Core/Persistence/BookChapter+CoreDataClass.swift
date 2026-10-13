@@ -63,7 +63,7 @@ extension BookChapter {
     }
     
     var displayIndex: String {
-        return "\(index + 1)"
+        return "\(Int64(index) + 1)"
     }
     
     var cacheKey: String {

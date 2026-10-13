@@ -49,7 +49,7 @@ def verify(directory, args):
 import Foundation
 
 // CoreData and cookies do not participate in these parser checks.
-final class BookSource {
+final class BookSourceSnapshot {
     var bookSourceUrl = "https://example.com"
     var bookSourceName = "Regression source"
     var loginUrl: String? = nil
@@ -58,6 +58,7 @@ final class BookSource {
     var enabledCookieJar = false
     var concurrentRate: String? = nil
 }
+typealias BookSource = BookSourceSnapshot
 final class CookieManager {
     static let shared = CookieManager()
     func getCookie(for tag: String) -> String? { nil }

@@ -40,6 +40,7 @@ end
 project.main_group.recursive_children.each do |child|
   next unless child.is_a?(Xcodeproj::Project::Object::PBXFileReference)
   next unless child.path && child.path.end_with?('.swift')
+  next if child.path.start_with?('Tests/')
   
   unless swift_files_on_disk.include?(child.path)
     puts "Removing orphan file ref: #{child.path}"
@@ -63,5 +64,44 @@ swift_files_on_disk.each do |file_path|
   end
 end
 
+test_targets = [
+  ['LegadoStabilityTests', :unit_test_bundle, 'Tests/Stability/'],
+  ['LegadoUITests', :ui_test_bundle, 'Tests/UI/']
+].map do |name, type, directory|
+  test_target = project.targets.find { |item| item.name == name } || project.new_target(type, name, :ios, '16.0')
+  test_target.add_dependency(target) unless test_target.dependencies.any? { |dependency| dependency.target == target }
+  test_target.build_configurations.each do |configuration|
+    settings = configuration.build_settings
+    settings['PRODUCT_BUNDLE_IDENTIFIER'] = "com.legado.#{name}"
+    settings['GENERATE_INFOPLIST_FILE'] = 'YES'
+    settings['SWIFT_VERSION'] = '5.0'
+    settings['TARGETED_DEVICE_FAMILY'] = '1,2'
+    settings['CODE_SIGNING_ALLOWED'] = 'NO'
+    if type == :unit_test_bundle
+      settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/Legado.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Legado'
+      settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
+    else
+      settings['TEST_TARGET_NAME'] = 'Legado'
+    end
+  end
+  existing = test_target.source_build_phase.files.map { |item| item.file_ref&.path }
+  Dir.glob("#{directory}**/*.swift").each do |path|
+    next if existing.include?(path)
+    reference = project.main_group.recursive_children.find { |child| child.respond_to?(:path) && child.path == path }
+    reference ||= project.main_group.new_file(path)
+    test_target.source_build_phase.add_file_reference(reference)
+  end
+  test_target
+end
+
 project.save
+scheme = Xcodeproj::XCScheme.new
+scheme.add_build_target(target)
+scheme.set_launch_target(target)
+scheme.test_action.build_configuration = 'Debug'
+test_targets.each do |test_target|
+  scheme.add_build_target(test_target, false)
+  scheme.add_test_target(test_target)
+end
+scheme.save_as(project_path, 'Legado', true)
 puts "Project saved. Added #{added} file(s), removed #{removed} file(s)."

@@ -102,6 +102,36 @@ func checkExtraction() throws {
     check(engine.getString(ruleStr: "{{'$.name'}}", elementContext: jsonElements[0]) == "JSON书籍", "JSON inline JavaScript still works")
 }
 
+func checkInnerRules() {
+    let root: [String: Any] = ["index": 0, "items": [["name": "嵌套规则书籍"]]]
+    check(JSONPathParser.evaluate(path: "$.items[{$.index}].name", root: root).first as? String == "嵌套规则书籍",
+          "JSONPath executes a nested rule and keeps the suffix")
+    check(JSONPathParser.evaluate(path: "$.items[{$.missing}].name", root: root).isEmpty,
+          "missing nested JSONPath values fail without a process crash")
+    for text in ["{$.missing}", "{$.missing}尾部", "📚{$.missing}尾部", "{$.missing", "{$.missing}\\", "{[}]"] {
+        _ = RuleAnalyzer(data: text, code: true).innerRule(inner: "{$.") { _ in "" }
+    }
+    check(RuleAnalyzer(data: "📚{{1}}尾部{{2}}结束", code: true)
+        .innerRule(inner: "{{", startStep: 2, endStep: 2) { "替换" + $0 } == "📚替换1尾部替换2结束",
+          "multiple nested rules preserve Unicode and trailing text")
+    check(RuleAnalyzer(data: "<one>missing</one>tail<one>found</one>")
+        .innerRule(startStr: "<one>", endStr: "</one>") { $0 == "found" ? "ok" : nil }
+        == "<one>missing</one>tailok", "an unresolved delimited rule preserves the surrounding text")
+    let analyzer = RuleAnalyzer(data: "a[b='&&']&&c&&d")
+    check(analyzer.splitRule("&&") == ["a[b='&&']", "c", "d"], "rule splitting ignores separators inside balanced groups")
+    analyzer.reSetPos()
+    check(analyzer.splitRule("&&") == ["a[b='&&']", "c", "d"], "resetting a rule analyzer clears previous results")
+    let chain = Array(repeating: "a[b='&&']", count: 10_000).joined(separator: "&&")
+    check(RuleAnalyzer(data: chain).splitRule("&&").count == 10_000,
+          "long balanced rule chains do not recurse on the stack")
+    let parsed = try! JSONSerialization.jsonObject(with: Data("{\"zero\":0,\"one\":1,\"enabled\":true}".utf8))
+    let values = ExecutionContext()
+    values.jsonValue = parsed
+    check(try! JSONPathParser().execute("$.zero", context: values).string == "0", "JSONSerialization numeric zero remains a number")
+    check(try! JSONPathParser().execute("$.one", context: values).string == "1", "JSONSerialization numeric one remains a number")
+    check(try! JSONPathParser().execute("$.enabled", context: values).string == "true", "JSONSerialization booleans retain their type")
+}
+
 func checkConcurrentParsing() {
     let lock = NSLock()
     var failureCount = 0
@@ -182,6 +212,7 @@ func checkCorpus(_ path: String) throws {
         rule.makeUpRule(result: ["", "capture"], context: context)
         _ = parser.parse(text)
         _ = RuleSplitter.split(text)
+        _ = JSONPathParser.evaluate(path: text, root: ["index": 0, "items": [["name": "fixture"]]])
     }
     print("PASS: \(rules.count) imported source rules parse without executing JavaScript")
 }
@@ -195,6 +226,7 @@ default:
     checkUnicode()
     try checkJavaScriptInputs()
     try checkExtraction()
+    checkInnerRules()
     checkConcurrentParsing()
     await checkSourceConcurrency()
     if CommandLine.arguments.count > 2 { try checkCorpus(CommandLine.arguments[2]) }

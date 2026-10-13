@@ -55,7 +55,11 @@ final class TxtFileParser {
     }
 
     private static let cacheLock = NSLock()
-    private static var cache: [String: CacheEntry] = [:]
+    private struct CacheKey: Hashable {
+        let path: String
+        let pattern: String?
+    }
+    private static var cache: [CacheKey: CacheEntry] = [:]
 
     private static let bufferChapterLength = 10 * 1024
     private static let introLength = 500
@@ -74,7 +78,7 @@ final class TxtFileParser {
 
         let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
         let modifiedAt = (attributes?[.modificationDate] as? Date) ?? .distantPast
-        let cacheKey = url.standardizedFileURL.path
+        let cacheKey = CacheKey(path: url.standardizedFileURL.path, pattern: preferredPattern?.isEmpty == false ? preferredPattern : nil)
 
         cacheLock.lock()
         if let entry = cache[cacheKey], entry.modifiedAt == modifiedAt {
@@ -122,7 +126,9 @@ final class TxtFileParser {
     static func readChapter(file url: URL, chapterIndex: Int, metadataTag: String?, preferredPattern: String? = nil) throws -> String {
         let parsedBook = try parse(file: url, preferredPattern: preferredPattern)
 
-        if let range = contentRange(from: metadataTag) {
+        if let range = contentRange(from: metadataTag),
+           range.location <= parsedBook.content.utf16.count,
+           range.length <= parsedBook.content.utf16.count - range.location {
             return formattedChapterContent(from: range, in: parsedBook.content)
         }
 
@@ -352,7 +358,8 @@ final class TxtFileParser {
         let components = metadataTag.split(separator: ":")
         guard components.count == 5,
               let location = Int(components[3]),
-              let length = Int(components[4]) else {
+              let length = Int(components[4]), location >= 0, length >= 0,
+              location <= Int.max - length else {
             return nil
         }
         return NSRange(location: location, length: length)

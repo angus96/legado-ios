@@ -15,7 +15,16 @@ lazy var persistentContainer: NSPersistentContainer = {
         let container = NSPersistentContainer(name: Self.modelName)
         
         // 使用 App Group 共享目录存储 CoreData
-        let storeURL = Self.storeURL
+        let legacyURL = NSPersistentContainer.defaultDirectoryURL().appendingPathComponent("\(Self.modelName).sqlite")
+        let storeURL: URL
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["LEGADO_UI_TESTS"] == "1" { storeURL = Self.storeURL }
+        else { storeURL = CoreDataStoreMigration.prepare(legacy: legacyURL, destination: Self.storeURL,
+                                                        coordinator: container.persistentStoreCoordinator) }
+        #else
+        storeURL = CoreDataStoreMigration.prepare(legacy: legacyURL, destination: Self.storeURL,
+                                                 coordinator: container.persistentStoreCoordinator)
+        #endif
         let description = NSPersistentStoreDescription(url: storeURL)
         description.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
         description.setOption(true as NSNumber, forKey: NSMigratePersistentStoresAutomaticallyOption)
@@ -43,8 +52,6 @@ lazy var persistentContainer: NSPersistentContainer = {
                 DebugLogger.shared.log("Store: \(store.url?.path ?? "nil"), readOnly=\(store.isReadOnly)")
             }
             
-            // 旧数据迁移：检测私有目录是否有旧 store，如有则迁移到 App Group 目录
-            Self.migrateLegacyStoreIfNeeded(to: storeURL)
         }
         
         return container
@@ -53,50 +60,17 @@ lazy var persistentContainer: NSPersistentContainer = {
     /// 计算 CoreData store 的存储位置
     /// 优先使用 App Group 共享目录，不可用时降级到私有目录
     static var storeURL: URL {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["LEGADO_UI_TESTS"] == "1" {
+            return FileManager.default.temporaryDirectory.appendingPathComponent("UITest-\(UUID()).sqlite")
+        }
+        #endif
         if let groupURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) {
             return groupURL.appendingPathComponent("\(modelName).sqlite")
         }
         // 降级：App Group 不可用时使用默认私有目录
         let documentsURL = NSPersistentContainer.defaultDirectoryURL()
         return documentsURL.appendingPathComponent("\(modelName).sqlite")
-    }
-    
-    /// 旧数据迁移：将私有目录中的旧 store 迁移到 App Group 共享目录
-    private static func migrateLegacyStoreIfNeeded(to newStoreURL: URL) {
-        // 只在 App Group 目录可用时执行迁移
-        guard FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) != nil else { return }
-        
-        let legacyDir = NSPersistentContainer.defaultDirectoryURL()
-        let legacyStoreURL = legacyDir.appendingPathComponent("\(modelName).sqlite")
-        let legacySHMURL = legacyDir.appendingPathComponent("\(modelName).sqlite-shm")
-        let legacyWALURL = legacyDir.appendingPathComponent("\(modelName).sqlite-wal")
-        
-        let fileManager = FileManager.default
-        
-        // 新位置已有数据则跳过
-        if fileManager.fileExists(atPath: newStoreURL.path) { return }
-        
-        // 旧位置没有数据则跳过
-        if !fileManager.fileExists(atPath: legacyStoreURL.path) { return }
-        
-        DebugLogger.shared.log("检测到旧 CoreData store，开始迁移到 App Group 目录")
-        
-        do {
-            // 确保 App Group 目录存在
-            let newDirectory = newStoreURL.deletingLastPathComponent()
-            try fileManager.createDirectory(at: newDirectory, withIntermediateDirectories: true)
-            
-            // 移动 sqlite、shm、wal 文件
-            for (src, dst) in [(legacyStoreURL, newStoreURL), (legacySHMURL, newStoreURL.deletingLastPathComponent().appendingPathComponent("\(modelName).sqlite-shm")), (legacyWALURL, newStoreURL.deletingLastPathComponent().appendingPathComponent("\(modelName).sqlite-wal"))] {
-                if fileManager.fileExists(atPath: src.path) {
-                    try? fileManager.moveItem(at: src, to: dst)
-                }
-            }
-            
-            DebugLogger.shared.log("旧数据迁移完成")
-        } catch {
-            DebugLogger.shared.log("旧数据迁移失败: \(error.localizedDescription)，旧数据保留在原位置")
-        }
     }
     
     var storeCount: Int {
@@ -138,8 +112,10 @@ func newBackgroundContext() -> NSManagedObjectContext {
     
     func save(context: NSManagedObjectContext? = nil) throws {
         let ctx = context ?? viewContext
-        guard ctx.hasChanges else { return }
-        try ctx.save()
+        try ctx.performAndWait {
+            guard ctx.hasChanges else { return }
+            try ctx.save()
+        }
     }
     
     func performBackgroundTask<T>(_ block: @escaping (NSManagedObjectContext) throws -> T) async throws -> T {

@@ -118,6 +118,7 @@ struct ReadMenu: View {
                         .foregroundColor(.white)
                         .cornerRadius(2)
                 }
+                .accessibilityIdentifier("reader.changeSource")
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)

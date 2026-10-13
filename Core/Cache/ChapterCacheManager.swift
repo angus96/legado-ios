@@ -21,6 +21,7 @@ final class ChapterCacheManager: ObservableObject {
     /// 最大并发下载数
     private let maxConcurrency: Int = 3
     
+    private var preloadID = UUID()
     private var activeTaskCount: Int = 0
     private var pendingChapters: [BookChapter] = []
     
@@ -43,7 +44,7 @@ final class ChapterCacheManager: ObservableObject {
         // 取消旧任务
         cancelPreload()
         
-        guard !chapters.isEmpty else { return }
+        guard chapters.indices.contains(index) else { return }
         
         // 计算需要预加载的范围
         let startIndex = max(0, index - preloadCount)
@@ -73,29 +74,25 @@ final class ChapterCacheManager: ObservableObject {
         guard !pendingChapters.isEmpty, activeTaskCount < maxConcurrency else { return }
         
         let chapter = pendingChapters.removeFirst()
+        let requestID = preloadID
         activeTaskCount += 1
         
         let task = Task { [weak self] in
+            guard let self else { return }
             do {
-                try await self?.cacheChapterContent(chapter, book: book)
-                await MainActor.run {
-                    self?.cachedChapterCount += 1
-                }
+                try await cacheChapterContent(chapter, book: book)
+                guard requestID == preloadID, !Task.isCancelled else { return }
+                cachedChapterCount += 1
             } catch {
-                DebugLogger.shared.log("预缓存失败[\(chapter.title)]: \(error.localizedDescription)")
+                guard requestID == preloadID, !Task.isCancelled else { return }
+                DebugLogger.shared.log("预缓存失败：\(error.localizedDescription)")
             }
-            
-            await MainActor.run {
-                self?.activeTaskCount -= 1
-                
-                if self?.pendingChapters.isEmpty == true && self?.activeTaskCount == 0 {
-                    self?.isCaching = false
-                } else {
-                    self?.startNextCacheTask(book: book)
-                }
-            }
+            guard requestID == preloadID else { return }
+            activeTaskCount -= 1
+            if pendingChapters.isEmpty && activeTaskCount == 0 { isCaching = false }
+            else { startNextCacheTask(book: book) }
         }
-        
+
         preloadTasks.append(task)
     }
     
@@ -163,15 +160,14 @@ final class ChapterCacheManager: ObservableObject {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let chapterDir = documents.appendingPathComponent("chapters", isDirectory: true)
         
-        guard FileManager.default.fileExists(atPath: chapterDir.path) else { return }
-        
-        let context = CoreDataStack.shared.viewContext
+        cancelPreload()
+        let context = book.managedObjectContext ?? CoreDataStack.shared.viewContext
         
         // 清理文件
         if let chapters = book.chapters as? Set<BookChapter> {
             for chapter in chapters {
                 if let cachePath = chapter.cachePath, !cachePath.isEmpty {
-                    let fileURL = chapterDir.appendingPathComponent(cachePath)
+                    let fileURL = ChapterContentLoader.cacheURL(cachePath)
                     try? FileManager.default.removeItem(at: fileURL)
                     
                     chapter.isCached = false
@@ -193,7 +189,7 @@ final class ChapterCacheManager: ObservableObject {
         if let chapters = book.chapters as? Set<BookChapter> {
             for chapter in chapters {
                 guard let cachePath = chapter.cachePath, !cachePath.isEmpty else { continue }
-                let fileURL = chapterDir.appendingPathComponent(cachePath)
+                let fileURL = ChapterContentLoader.cacheURL(cachePath)
                 if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
                    let size = attrs[.size] as? Int64 {
                     totalSize += size
@@ -215,6 +211,9 @@ final class ChapterCacheManager: ObservableObject {
     // MARK: - 取消
     
     func cancelPreload() {
+        preloadID = UUID()
+        pendingChapters.removeAll()
+        activeTaskCount = 0
         for task in preloadTasks {
             task.cancel()
         }
@@ -225,38 +224,7 @@ final class ChapterCacheManager: ObservableObject {
     // MARK: - 私有方法
     
     private func cacheChapterContent(_ chapter: BookChapter, book: Book) async throws {
-        // 从网络获取内容
         guard !book.isLocal else { return }
-        
-        guard let sourceId = UUID(uuidString: book.origin) else {
-            throw ReaderError.noSource
-        }
-        
-        let context = CoreDataStack.shared.viewContext
-        let request: NSFetchRequest<BookSource> = BookSource.fetchRequest()
-        request.predicate = NSPredicate(format: "sourceId == %@", sourceId as CVarArg)
-        request.fetchLimit = 1
-        
-        guard let source = try context.fetch(request).first else {
-            throw ReaderError.noSource
-        }
-        
-        let content = try await WebBook.getContent(source: source, book: book, chapter: chapter)
-        
-        // 保存到文件
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let chapterDir = documents.appendingPathComponent("chapters", isDirectory: true)
-        
-        if !FileManager.default.fileExists(atPath: chapterDir.path) {
-            try FileManager.default.createDirectory(at: chapterDir, withIntermediateDirectories: true)
-        }
-        
-        let fileName = "\(chapter.bookId.uuidString)_\(chapter.index).txt"
-        let fileURL = chapterDir.appendingPathComponent(fileName)
-        try content.write(to: fileURL, atomically: true, encoding: .utf8)
-        
-        chapter.isCached = true
-        chapter.cachePath = fileName
-        try context.save()
+        try await ChapterContentLoader.cache(chapter: chapter, book: book)
     }
 }

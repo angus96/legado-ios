@@ -3,6 +3,7 @@ import UIKit
 /// 翻页代理基类
 /// 一比一移植自 Android Legado PageDelegate.kt (208行)
 /// 原版路径: app/src/main/java/io/legado/app/ui/book/read/page/delegate/PageDelegate.kt
+@MainActor
 class PageDelegate {
     
     weak var readView: ReadViewProtocol?

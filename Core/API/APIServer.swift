@@ -99,10 +99,10 @@ class APIServer {
     }
     
     private func handleSync(path: String, request: HTTPRequest) -> HTTPResponse {
-        let queryParameters: [String: String] = Dictionary(uniqueKeysWithValues: request.queryItems.compactMap { item in
+        let queryParameters: [String: String] = Dictionary(request.queryItems.compactMap { item in
             guard let value = item.value else { return nil }
             return (item.name, value)
-        })
+        }, uniquingKeysWith: { _, last in last })
         
         let apiRequest = APIRequest(
             method: request.method,
@@ -115,7 +115,7 @@ class APIServer {
         let apiResponse: APIResponse
         switch path {
         case "/getBookSources":
-            apiResponse = BookSourceAPI.getSources()
+            apiResponse = CoreDataStack.shared.viewContext.performAndWait { BookSourceAPI.getSources() }
         default:
             apiResponse = .error("未知接口: \(path)")
         }
