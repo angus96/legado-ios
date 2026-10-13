@@ -121,6 +121,9 @@ func checkAndroidHTMLRules() throws {
     check(engine.getString(ruleStr: "text.点击阅读@href", elementContext: root) == "https://example.com/toc", "Android text selector resolves the directory link")
     check(engine.getString(ruleStr: "[data-user='reader@example.com']@href", elementContext: root) == "https://example.com/quoted", "CSS quoted attributes keep embedded at signs")
     check(try engine.getElements(ruleStr: "class.librarylist@tag.li.0,1", body: body, baseUrl: baseURL).count == 2, "Android selector accepts multiple indexes")
+    let excluded = try engine.getElements(ruleStr: "class.librarylist@tag.li!0", body: body, baseUrl: baseURL)
+    check(excluded.count == 1 && engine.getString(ruleStr: ".info@tag.span.0@text", elementContext: excluded[0]) == "斗破苍穹", "Android list exclusion skips the header or first result")
+    check(try engine.getElements(ruleStr: "class.librarylist@tag.li!0,-1", body: body, baseUrl: baseURL).isEmpty, "Android list exclusion accepts multiple and negative indexes")
 }
 
 func checkInnerRules() {

@@ -962,6 +962,15 @@ private enum HTMLRuleSelector {
     private static func selectStep(_ step: String, from root: SwiftSoup.Element) throws -> [SwiftSoup.Element] {
         var selector = step
         var indexes: [Int]?
+        var excludedIndexes: [Int]?
+        if let separator = selector.lastIndex(of: "!") {
+            let parts = selector[selector.index(after: separator)...].split(separator: ",", omittingEmptySubsequences: false)
+            let parsed = parts.compactMap { Int($0) }
+            if !parts.isEmpty, parsed.count == parts.count {
+                excludedIndexes = parsed
+                selector = String(selector[..<separator])
+            }
+        }
         // 数字后缀表示当前选择结果中的下标，负数从末尾计算。
         if let separator = selector.lastIndex(of: ".") {
             let suffix = String(selector[selector.index(after: separator)...])
@@ -989,6 +998,13 @@ private enum HTMLRuleSelector {
             elements = try root.select("*").array().filter { try $0.ownText().contains(text) }
         } else {
             elements = try root.select(selector).array()
+        }
+        if let excludedIndexes {
+            let excluded = Set(excludedIndexes.compactMap { offset -> Int? in
+                guard offset >= -elements.count && offset < elements.count else { return nil }
+                return offset < 0 ? elements.count + offset : offset
+            })
+            return elements.enumerated().filter { !excluded.contains($0.offset) }.map { $0.element }
         }
         guard let indexes else { return elements }
         return indexes.compactMap { offset in

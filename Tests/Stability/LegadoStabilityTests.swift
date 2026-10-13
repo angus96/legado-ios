@@ -14,6 +14,7 @@ final class LegadoStabilityTests: XCTestCase {
         XCTAssertEqual(engine.getString(ruleStr: ".info@tag.span.-1@tag.a@text", elementContext: item), "忘语")
         XCTAssertEqual(engine.getString(ruleStr: ".info@tag.span.0@tag.a@href", elementContext: item), "https://example.invalid/book")
         XCTAssertTrue(engine.getString(ruleStr: ".info@tag.span.999@text", elementContext: item).isEmpty)
+        XCTAssertTrue(try engine.getElements(ruleStr: "class.librarylist@tag.li!0", body: body, baseUrl: "https://example.invalid").isEmpty)
     }
 
     func testSerializedNumbersAndMissingInnerRules() throws {
