@@ -11,6 +11,11 @@ import SwiftUI
 
 @MainActor
 class SourceViewModel: ObservableObject {
+    private let context: NSManagedObjectContext
+
+    init(context: NSManagedObjectContext = CoreDataStack.shared.viewContext) {
+        self.context = context
+    }
     @Published var sources: [BookSource] = []
     @Published var errorMessage: String?
     
@@ -66,7 +71,7 @@ class SourceViewModel: ObservableObject {
     
     func deleteGroup(_ name: String) {
         // 从书源中移除该分组
-        let context = CoreDataStack.shared.viewContext
+        let context = self.context
         var needsSave = false
         for source in sources where source.bookSourceGroup == name {
             source.bookSourceGroup = nil
@@ -96,7 +101,7 @@ class SourceViewModel: ObservableObject {
             request.sortDescriptors = [NSSortDescriptor(key: "customOrder", ascending: true)]
             request.includesPendingChanges = false
             
-            sources = try CoreDataStack.shared.viewContext.fetch(request)
+            sources = try context.fetch(request)
             updateGroups()
         } catch {
             errorMessage = "加载书源失败：\(error.localizedDescription)"
@@ -115,7 +120,7 @@ class SourceViewModel: ObservableObject {
         ruleToc: String,
         ruleContent: String
     ) -> Bool {
-        let context = CoreDataStack.shared.viewContext
+        let context = self.context
         let source = BookSource.create(in: context)
         
         source.bookSourceName = name
@@ -136,7 +141,7 @@ class SourceViewModel: ObservableObject {
         }
         
         do {
-            try CoreDataStack.shared.save()
+            try context.save()
             Task { await loadSources() }
             return true
         } catch {
@@ -160,7 +165,7 @@ class SourceViewModel: ObservableObject {
         ruleToc: String,
         ruleContent: String
     ) -> Bool {
-        let context = CoreDataStack.shared.viewContext
+        let context = self.context
         source.bookSourceName = name
         source.bookSourceUrl = url
         source.bookSourceGroup = group.isEmpty ? nil : group
@@ -179,7 +184,7 @@ class SourceViewModel: ObservableObject {
         }
         
         do {
-            try CoreDataStack.shared.save()
+            try context.save()
             Task { await loadSources() }
             return true
         } catch {
@@ -191,33 +196,27 @@ class SourceViewModel: ObservableObject {
     }
     
     func deleteSource(_ source: BookSource) {
-        let context = CoreDataStack.shared.viewContext
-        context.delete(source)
-        do {
-            try CoreDataStack.shared.save()
-        } catch {
-            context.rollback()
-            errorMessage = "删除失败：\(error.localizedDescription)"
-        }
-        Task {
-            await loadSources()
-        }
+        deleteSources([source])
     }
     
     func deleteSources(at indexSet: IndexSet) {
-        let context = CoreDataStack.shared.viewContext
-        for index in indexSet {
-            context.delete(sources[index])
+        deleteSources(indexSet.compactMap { sources.indices.contains($0) ? sources[$0] : nil })
+    }
+
+    func deleteSources(_ selected: [BookSource]) {
+        let objectIDs = Set(selected.map(\.objectID))
+        sources.removeAll { objectIDs.contains($0.objectID) || $0.isDeleted || $0.managedObjectContext == nil }
+        updateGroups()
+        for source in selected where !source.isDeleted && source.managedObjectContext === context {
+            context.delete(source)
         }
         do {
-            try CoreDataStack.shared.save()
+            try context.save()
         } catch {
             context.rollback()
             errorMessage = "删除失败：\(error.localizedDescription)"
         }
-        Task {
-            await loadSources()
-        }
+        Task { await loadSources() }
     }
     
     func importFromURL(_ urlString: String) async -> Int {
@@ -340,7 +339,7 @@ class SourceViewModel: ObservableObject {
     }
     
     private func importFromJSON(_ sources: [[String: Any]]) -> Int {
-        let context = CoreDataStack.shared.viewContext
+        let context = self.context
 
         var importedCount = 0
         for sourceData in sources {
@@ -357,7 +356,7 @@ class SourceViewModel: ObservableObject {
         }
         
         do {
-            try CoreDataStack.shared.save()
+            try context.save()
             Task { await loadSources() }
             return importedCount
         } catch {
@@ -369,7 +368,7 @@ class SourceViewModel: ObservableObject {
     }
     
     private func importSingleSource(_ sourceData: [String: Any]) -> Int {
-        let context = CoreDataStack.shared.viewContext
+        let context = self.context
         guard let url = sourceData["bookSourceUrl"] as? String, !url.isEmpty,
               let name = sourceData["bookSourceName"] as? String, !name.isEmpty else {
             errorMessage = "导入失败：书源数据缺少必要字段"
@@ -382,7 +381,7 @@ class SourceViewModel: ObservableObject {
         applySourceData(source, sourceData)
 
         do {
-            try CoreDataStack.shared.save()
+            try context.save()
             Task { await loadSources() }
             return 1
         } catch {
@@ -394,7 +393,7 @@ class SourceViewModel: ObservableObject {
     }
 
     private func importParsedSources(_ parsed: ParsedSourceFile) -> SourceImportSummary {
-        let context = CoreDataStack.shared.viewContext
+        let context = self.context
         var summary = SourceImportSummary(failedCount: parsed.failedCount)
         var seenUrls = Set<String>()
 
@@ -408,13 +407,9 @@ class SourceViewModel: ObservableObject {
             request.fetchLimit = 1
             request.predicate = NSPredicate(format: "bookSourceUrl == %@", candidate.bookSourceUrl)
 
-            if (try? context.fetch(request).first) != nil {
-                summary.skippedCount += 1
-                seenUrls.insert(candidate.bookSourceUrl)
-                continue
-            }
-
-            let source = BookSource.create(in: context)
+            let existing = try? context.fetch(request).first
+            let source = existing ?? BookSource.create(in: context)
+            if existing != nil { summary.updatedCount += 1 }
             source.bookSourceUrl = candidate.bookSourceUrl
             source.bookSourceName = candidate.bookSourceName
             applySourceData(source, candidate.rawData)
@@ -423,13 +418,14 @@ class SourceViewModel: ObservableObject {
         }
 
         do {
-            try CoreDataStack.shared.save()
+            try context.save()
             Task { await loadSources() }
         } catch {
             context.rollback()
             summary.detailMessage = "保存失败：\(error.localizedDescription)"
             summary.failedCount += summary.successCount
             summary.successCount = 0
+            summary.updatedCount = 0
             Task { await loadSources() }
         }
 
@@ -657,12 +653,14 @@ private enum SourceImportError: LocalizedError {
 
 struct SourceImportSummary {
     var successCount: Int = 0
+    var updatedCount: Int = 0
     var skippedCount: Int = 0
     var failedCount: Int = 0
     var detailMessage: String?
 
     mutating func merge(_ other: SourceImportSummary) {
         successCount += other.successCount
+        updatedCount += other.updatedCount
         skippedCount += other.skippedCount
         failedCount += other.failedCount
         if detailMessage == nil {
@@ -671,7 +669,7 @@ struct SourceImportSummary {
     }
 
     var message: String {
-        let base = "成功 \(successCount) 个，跳过 \(skippedCount) 个，失败 \(failedCount) 个"
+        let base = "成功 \(successCount) 个（含更新 \(updatedCount) 个），跳过 \(skippedCount) 个，失败 \(failedCount) 个"
         if let detailMessage, !detailMessage.isEmpty {
             return base + "\n" + detailMessage
         }

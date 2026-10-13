@@ -4,7 +4,11 @@ class TextColumn: BaseColumn, Hashable {
     var start: Float
     var end: Float
     let charData: String
-    var textLine: TextLine = TextLine.empty
+    private weak var parent: TextLine?
+    var textLine: TextLine {
+        get { parent ?? TextLine.empty }
+        set { parent = newValue }
+    }
     
     func hash(into hasher: inout Hasher) {
         hasher.combine(start)
@@ -63,7 +67,7 @@ class TextColumn: BaseColumn, Hashable {
         ]
         
         let attributedString = NSAttributedString(string: charData, attributes: attributes)
-        attributedString.draw(at: CGPoint(x: x, y: y - font.lineHeight))
+        attributedString.draw(at: CGPoint(x: x, y: y - font.ascender))
         
         if selected {
             context.setFillColor(UIColor.systemBlue.withAlphaComponent(0.3).cgColor)

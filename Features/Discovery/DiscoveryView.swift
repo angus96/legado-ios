@@ -21,7 +21,7 @@ struct DiscoveryView: View {
         .task { await viewModel.loadExploreGroups() }
         .refreshable { await viewModel.refresh() }
         .sheet(item: $viewModel.selectedExplore) { selection in
-            NavigationView {
+            NavigationStack {
                 ExploreResultsView(selection: selection)
             }
         }

@@ -9,7 +9,7 @@ final class DebugLogger {
 // 本机命令行测试只覆盖普通 HTTP 请求；WebKit 需要在 iOS 运行环境验证。
 final class BackstageWebView {
     init(url: String, html: String? = nil, tag: String? = nil, headerMap: [String: String],
-         sourceRegex: String? = nil, javaScript: String? = nil, delayTime: Int64) {}
+         sourceRegex: String? = nil, javaScript: String? = nil, delayTime: Int64, timeout: Int64 = 30_000) {}
     func getStrResponse() async throws -> StrResponse { throw URLError(.unsupportedURL) }
 }
 

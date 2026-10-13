@@ -63,7 +63,7 @@ class ChapterProvider {
     // MARK: - 双页模式
     var doublePage: Bool = false
     
-    private init() {}
+    private init() { updateStyle(titleFont: titleFont, contentFont: contentFont) }
     
     // MARK: - 更新样式
     func updateStyle(
@@ -136,6 +136,7 @@ class ChapterProvider {
     
     // MARK: - 创建 TextLayout (iOS 使用 TextKit)
     func createTextLayout(text: String, font: UIFont, width: CGFloat) -> [TextLayoutLine] {
+        guard !text.isEmpty, width > 0 else { return [] }
         let attributedString = NSAttributedString(
             string: text,
             attributes: [.font: font]
@@ -153,7 +154,7 @@ class ChapterProvider {
         var currentY: CGFloat = 0
         var prevGlyphRange = NSRange(location: 0, length: 0)
         
-        layoutManager.enumerateLineFragments(forGlyphRange: NSRange(location: 0, length: textStorage.length)) { rect, usedRect, textContainer, glyphRange, stop in
+        layoutManager.enumerateLineFragments(forGlyphRange: layoutManager.glyphRange(for: textContainer)) { rect, usedRect, textContainer, glyphRange, stop in
             let charRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
             let lineText = (text as NSString).substring(with: charRange)
             

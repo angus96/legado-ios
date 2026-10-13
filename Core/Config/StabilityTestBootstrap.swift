@@ -7,7 +7,7 @@ enum StabilityTestBootstrap {
         guard ProcessInfo.processInfo.environment["LEGADO_UI_TESTS"] == "1" else { return }
         let base = ProcessInfo.processInfo.environment["LEGADO_FIXTURE_URL"] ?? "http://127.0.0.1:8766"
         UserDefaults.standard.set(true, forKey: "hasCompletedWelcome")
-        UserDefaults.standard.set(0, forKey: "defaultHomePage")
+        UserDefaults.standard.set(0, forKey: "app.defaultHomePage")
         let rules: [String: Any] = [
             "ruleSearch": ["bookList": "$.books", "name": "$.titles[{$.idx}]", "author": "$.author", "bookUrl": "$.url"],
             "ruleBookInfo": ["name": "$.name", "author": "$.author", "tocUrl": "$.toc"],

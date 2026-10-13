@@ -4,7 +4,11 @@ class ImageColumn: BaseColumn {
     var start: Float
     var end: Float
     var src: String
-    var textLine: TextLine = TextLine.empty
+    private weak var parent: TextLine?
+    var textLine: TextLine {
+        get { parent ?? TextLine.empty }
+        set { parent = newValue }
+    }
     var book: Book?
     
     init(start: Float, end: Float, src: String, book: Book? = nil) {

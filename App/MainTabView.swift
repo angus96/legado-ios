@@ -19,14 +19,14 @@ struct MainTabView: View {
         TabView(selection: $selectedTab) {
             NavigationStack { BookshelfView() }
                 .tabItem {
-                    Image(systemName: "books.vertical.fill")
+                    Label("书架", systemImage: "books.vertical.fill")
                 }
                 .tag(0)
 
             if showDiscoveryPage {
                 NavigationStack { DiscoveryView() }
                     .tabItem {
-                        Image(systemName: "safari.fill")
+                        Label("发现", systemImage: "safari.fill")
                     }
                     .tag(1)
             }
@@ -34,16 +34,16 @@ struct MainTabView: View {
             if showRssPage {
                 NavigationStack { RSSSubscriptionView() }
                     .tabItem {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
+                        Label("订阅", systemImage: "antenna.radiowaves.left.and.right")
                     }
-                    .tag(showDiscoveryPage ? 2 : 1)
+                    .tag(2)
             }
 
             NavigationStack { MyView() }
                 .tabItem {
-                    Image(systemName: "person.fill")
+                    Label("我的", systemImage: "person.fill")
                 }
-                .tag(computeMyTabTag)
+                .tag(3)
         }
         .accentColor(.blue)
         .preferredColorScheme(
@@ -51,15 +51,15 @@ struct MainTabView: View {
             selectedTheme == "light" ? .light : nil
         )
         .onAppear {
-            selectedTab = defaultHomePage
+            selectedTab = availableTab(defaultHomePage)
         }
+        .onChange(of: showDiscoveryPage) { _ in selectedTab = availableTab(selectedTab) }
+        .onChange(of: showRssPage) { _ in selectedTab = availableTab(selectedTab) }
     }
 
-    private var computeMyTabTag: Int {
-        var tag = 1
-        if showDiscoveryPage { tag += 1 }
-        if showRssPage { tag += 1 }
-        return tag
+    private func availableTab(_ tab: Int) -> Int {
+        if tab == 1 && !showDiscoveryPage || tab == 2 && !showRssPage { return 0 }
+        return (0...3).contains(tab) ? tab : 0
     }
 }
 

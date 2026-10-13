@@ -168,7 +168,7 @@ class TextChapterLayout {
                 }
                 
                 // 处理剩余文本
-                if start < content.count {
+                if start < (content as NSString).length {
                     let text = (content as NSString).substring(from: start)
                     if !text.trimmingCharacters(in: .whitespaces).isEmpty {
                         await setTypeText(
@@ -301,7 +301,7 @@ class TextChapterLayout {
             end = Float(absStartX + width)
         }
         
-        textLine.addColumn(ImageColumn(start: start, end: end, src: src))
+        textLine.addColumn(ImageColumn(start: start, end: end, src: src, book: book))
         
         calcTextLinePosition(textLine, sbLength: stringBuilder.length)
         stringBuilder.append(" ")
@@ -331,6 +331,9 @@ class TextChapterLayout {
         let paragraphSpacing = provider.paragraphSpacing
         let titleTopSpacing = provider.titleTopSpacing
         
+        let text = !isTitle && isFirstLine
+            ? String(repeating: ChapterProvider.indentChar, count: ReadBookConfig.paragraphIndent.length) + text
+            : text
         // 测量文本宽度
         let widthsArray = measureTextWidths(text, font: font)
         let (words, widths) = measureTextSplit(text, widthsArray: widthsArray)
@@ -390,6 +393,7 @@ class TextChapterLayout {
             
             // 设置行垂直位置
             textLine.lineTop = Float(durY + paddingTop)
+            textLine.lineBase = Float(durY + paddingTop + font.ascender)
             textLine.lineBottom = Float(durY + textHeight + paddingTop)
             
             pendingTextPage.addLine(textLine)
@@ -400,7 +404,11 @@ class TextChapterLayout {
             }
         }
         
-        durY += textHeight * CGFloat(paragraphSpacing) / 10.0
+        if let lastLine = pendingTextPage.lines.last {
+            lastLine.isParagraphEnd = true
+        }
+        stringBuilder.append("\n")
+        durY += paragraphSpacing
     }
     
     // MARK: - 添加字符到行
@@ -420,44 +428,10 @@ class TextChapterLayout {
         var x = startX
         textLine.startX = Float(absStartX + startX)
         
-        // 处理首行缩进（非标题）
-        if !isTitle && startX == 0 && paragraphIndent.length > 0 {
-            for _ in 0..<paragraphIndent.length {
-                let x1 = x + indentCharWidth
-                textLine.addColumn(
-                    TextColumn(
-                        start: Float(absStartX + x),
-                        end: Float(absStartX + x1),
-                        charData: ChapterProvider.indentChar
-                    )
-                )
-                x = x1
-                textLine.indentWidth = Float(x)
-            }
-            textLine.indentSize = paragraphIndent.length
-            
-            // 处理剩余字符
-            if words.count > paragraphIndent.length {
-                let remainingWords = Array(words[paragraphIndent.length...])
-                let remainingWidths = Array(widths[paragraphIndent.length...])
-                await addCharsToLineNatural(
-                    words: remainingWords,
-                    widths: remainingWidths,
-                    textLine: textLine,
-                    startX: x
-                )
-            }
-        } else {
-            // 自然排版
-            await addCharsToLineNatural(
-                words: words,
-                widths: widths,
-                textLine: textLine,
-                startX: x
-            )
-        }
+        // 缩进已经参与整段测量，不能再替换每一行开头的正文字符。
+        await addCharsToLineNatural(words: words, widths: widths, textLine: textLine, startX: startX)
     }
-    
+
     // MARK: - 自然排版
     private func addCharsToLineNatural(
         words: [String],

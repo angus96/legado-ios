@@ -3,6 +3,7 @@ import CoreData
 
 struct SearchView: View {
     @StateObject private var viewModel = SearchViewModel()
+    @Environment(\.dismiss) private var dismiss
     @State private var showingSourcePicker = false
     @State private var showHistory = true
     @State private var navigatingToBookDetail = false
@@ -12,7 +13,7 @@ struct SearchView: View {
     @FocusState private var isSearchFocused: Bool
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack(spacing: 0) {
                 searchNavBar
                 progressView
@@ -21,9 +22,12 @@ struct SearchView: View {
             .navigationTitle("搜索")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("关闭") { viewModel.cancelSearch(); dismiss() }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showingSourcePicker = true }) {
-                        Image(systemName: "slider.horizontal.3")
+                        Label("书源", systemImage: "slider.horizontal.3")
                     }
                 }
             }
@@ -45,6 +49,7 @@ struct SearchView: View {
             }
         }
         .onAppear { loadHistory() }
+        .onDisappear { viewModel.cancelSearch() }
     }
     
     private var searchNavBar: some View {
@@ -62,7 +67,7 @@ struct SearchView: View {
                 }
             
             if !viewModel.searchText.isEmpty {
-                Button(action: { viewModel.searchText = "" }) {
+                Button(action: { viewModel.clearSearch(); showHistory = true }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
@@ -76,17 +81,46 @@ struct SearchView: View {
     }
     
     private var progressView: some View {
-        Group {
-            if viewModel.isSearching {
-                ProgressView()
-                    .progressViewStyle(.linear)
-                    .frame(height: 2)
+        VStack(spacing: 8) {
+            if viewModel.hasSearched {
+                HStack {
+                    if viewModel.isSearching { ProgressView().controlSize(.small) }
+                    Text("\(viewModel.wasCancelled ? "已停止" : (viewModel.isSearching ? "正在搜索" : "搜索完成")) · \(viewModel.completedSourceCount)/\(viewModel.totalSourceCount) 个书源")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .accessibilityIdentifier("search.progress")
+                    Spacer()
+                    if viewModel.isSearching {
+                        Button("停止") { viewModel.cancelSearch() }
+                            .accessibilityIdentifier("search.stop")
+                    }
+                }
+                if viewModel.failedSourceCount > 0 {
+                    DisclosureGroup("\(viewModel.failedSourceCount) 个书源暂时无法搜索") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(viewModel.sourceErrors, id: \.self) { error in
+                                Text(error).font(.caption).lineLimit(2)
+                            }
+                            if viewModel.failedSourceCount > viewModel.sourceErrors.count {
+                                Text("仅显示前 \(viewModel.sourceErrors.count) 条原因").font(.caption)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
             } else {
-                Divider()
+                HStack {
+                    Text("搜索 \(viewModel.selectedSources.count) 个已选书源")
+                    Spacer()
+                    Button("选择书源") { showingSourcePicker = true }
+                }.font(.caption).foregroundColor(.secondary)
             }
         }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
     }
-    
+
     @ViewBuilder
     private var contentView: some View {
         if showHistory && viewModel.searchText.isEmpty && viewModel.searchResults.isEmpty {
@@ -141,7 +175,8 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 48))
                 .foregroundColor(.secondary)
-            Text("输入关键词搜索书籍")
+            Text(viewModel.isSearching ? "正在向书源查找书籍…" :
+                 (viewModel.hasSearched ? (viewModel.wasCancelled ? "搜索已停止" : "没有找到相关书籍") : "输入书名或作者开始搜索"))
                 .font(.subheadline)
                 .foregroundColor(.secondary)
         }
@@ -149,52 +184,25 @@ struct SearchView: View {
     }
     
     private var resultsListView: some View {
-        ZStack {
-            List {
-                ForEach(viewModel.searchResults) { result in
-                    Button(action: { selectResult(result) }) {
-                        SearchItemView(result: result)
-                    }
+        List {
+            ForEach(viewModel.searchResults) { result in
+                Button(action: { selectResult(result) }) { SearchItemView(result: result) }
                     .buttonStyle(.plain)
-                    .disabled(openingResultId == result.id)
-                }
-            }
-            .listStyle(.plain)
-            
-            if viewModel.isSearching {
-                VStack {
-                    Spacer()
-                    stopButton
-                    Spacer()
-                }
+                    .disabled(openingResultId != nil)
             }
         }
+        .listStyle(.plain)
+        .scrollDismissesKeyboard(.interactively)
     }
-    
-    private var stopButton: some View {
-        HStack {
-            Spacer()
-            VStack {
-                Spacer()
-                Button(action: { viewModel.cancelSearch() }) {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 20))
-                        .foregroundColor(.white)
-                        .frame(width: 44, height: 44)
-                        .background(Color.red)
-                        .clipShape(Circle())
-                        .shadow(radius: 4)
-                }
-                .padding()
-            }
-        }
-    }
-    
+
     private func performSearch() {
+        let keyword = viewModel.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyword.isEmpty else { return }
+        isSearchFocused = false
         showHistory = false
         saveHistoryKeyword()
         Task {
-            await viewModel.search(keyword: viewModel.searchText, sources: viewModel.selectedSources)
+            await viewModel.search(keyword: keyword, sources: viewModel.selectedSources)
         }
     }
     
@@ -204,6 +212,7 @@ struct SearchView: View {
         Task {
             defer { openingResultId = nil }
             do {
+                viewModel.cancelSearch()
                 selectedBook = try await viewModel.addToBookshelf(result: result)
                 navigatingToBookDetail = true
             } catch {
@@ -260,9 +269,6 @@ struct SearchItemView: View {
             
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 8, height: 8)
                     Text(result.displayName)
                         .font(.system(size: 16))
                         .fontWeight(.medium)
@@ -271,17 +277,17 @@ struct SearchItemView: View {
                     Spacer()
                     
                     if result.sourceCount > 1 {
-                        Text("\(result.sourceCount)")
+                        Text("\(result.sourceCount) 个书源")
                             .font(.caption2)
                             .foregroundColor(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.red)
+                            .background(Color.accentColor)
                             .clipShape(Capsule())
                     }
                 }
                 
-                Text(result.displayAuthor)
+                Text(result.displayAuthor.isEmpty ? "未知作者" : result.displayAuthor)
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
@@ -295,7 +301,7 @@ struct SearchItemView: View {
 
                 if let kind = result.kind, !kind.isEmpty {
                     HStack(spacing: 4) {
-                        ForEach(kind.split(separator: ",").prefix(3), id: \.self) { tag in
+                        ForEach(Array(kind.split(separator: ",").prefix(3).enumerated()), id: \.offset) { _, tag in
                             Text(tag.trimmingCharacters(in: .whitespaces))
                                 .font(.system(size: 10))
                                 .padding(.horizontal, 4)
@@ -320,9 +326,10 @@ struct SearchItemView: View {
                         .foregroundColor(.secondary)
                         .lineLimit(2)
                 }
+                Text(result.sourceName).font(.caption2).foregroundColor(.secondary).lineLimit(1)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 8)
     }
 }
 
@@ -330,50 +337,60 @@ struct SourcePickerView: View {
     @Binding var selectedSources: [BookSource]
     @Environment(\.dismiss) var dismiss
     @State private var sources: [BookSource] = []
-    
-    var body: some View {
-        NavigationView {
-            List {
-                ForEach(sources, id: \.sourceId) { source in
-                    HStack {
-                        Text(source.displayName)
-                        Spacer()
-                        if selectedSources.contains(where: { $0.sourceId == source.sourceId }) {
-                            Image(systemName: "checkmark")
-                                .foregroundColor(.blue)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { toggleSource(source) }
-                }
-            }
-            .navigationTitle("选择书源")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("完成") { dismiss() }
-                }
-            }
-            .task { await loadSources() }
-        }
-    }
-    
-    private func loadSources() async {
-        do {
-            sources = try CoreDataStack.shared.viewContext.fetch(BookSource.fetchRequest())
-        } catch {
-            DebugLogger.shared.log("加载书源失败: \(error.localizedDescription)")
-        }
-    }
-    
-    private func toggleSource(_ source: BookSource) {
-        if let index = selectedSources.firstIndex(where: { $0.sourceId == source.sourceId }) {
-            selectedSources.remove(at: index)
-        } else {
-            selectedSources.append(source)
-        }
-    }
-}
+    @State private var query = ""
 
-#Preview {
-    SearchView()
+    private var filteredSources: [BookSource] {
+        sources.filter { query.isEmpty || $0.displayName.localizedCaseInsensitiveContains(query) ||
+            ($0.bookSourceGroup?.localizedCaseInsensitiveContains(query) ?? false) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack {
+                        Button("全选当前列表") {
+                            var ids = Set(selectedSources.map(\.sourceId))
+                            selectedSources += filteredSources.filter { ids.insert($0.sourceId).inserted }
+                        }
+                        Spacer()
+                        Button("清空") { selectedSources = [] }
+                    }
+                    Text("已选 \(selectedSources.count) 个；书源越多，完整搜索耗时越长。")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+                ForEach(filteredSources, id: \.objectID) { source in
+                    Button { toggleSource(source) } label: {
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(source.displayName)
+                                if let group = source.bookSourceGroup, !group.isEmpty {
+                                    Text(group).font(.caption).foregroundColor(.secondary)
+                                }
+                            }
+                            Spacer()
+                            if selectedSources.contains(where: { $0.objectID == source.objectID }) {
+                                Image(systemName: "checkmark").foregroundColor(.accentColor)
+                            }
+                        }.foregroundColor(.primary)
+                    }
+                }
+            }
+            .searchable(text: $query, prompt: "按书源名称或分组筛选")
+            .navigationTitle("选择书源")
+            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { dismiss() } } }
+            .task {
+                let request = BookSource.fetchRequest()
+                request.predicate = NSPredicate(format: "enabled == YES AND searchUrl != nil AND searchUrl != ''")
+                request.sortDescriptors = [NSSortDescriptor(key: "bookSourceName", ascending: true)]
+                sources = (try? CoreDataStack.shared.viewContext.fetch(request)) ?? []
+            }
+        }
+    }
+
+    private func toggleSource(_ source: BookSource) {
+        if let index = selectedSources.firstIndex(where: { $0.objectID == source.objectID }) {
+            selectedSources.remove(at: index)
+        } else { selectedSources.append(source) }
+    }
 }

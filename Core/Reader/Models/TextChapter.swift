@@ -81,7 +81,7 @@ class TextChapter {
     }
     
     func getReadLength(_ pageIndex: Int) -> Int {
-        if pageIndex < 0 { return 0 }
+        if pageIndex < 0 || pages.isEmpty { return 0 }
         let targetIndex = min(pageIndex, lastIndex)
         return pages[targetIndex].chapterPosition
     }
@@ -113,7 +113,7 @@ class TextChapter {
     func getUnRead(_ pageIndex: Int) -> String {
         var result = ""
         if pages.isEmpty { return result }
-        for index in pageIndex..<(pages.count) {
+        for index in min(max(0, pageIndex), pages.count)..<pages.count {
             result += pages[index].text
         }
         return result

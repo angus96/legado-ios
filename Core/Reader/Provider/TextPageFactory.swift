@@ -88,7 +88,7 @@ class TextPageFactory {
             if !prevChapter.isCompleted {
                 return false
             }
-            ReadBook.shared.moveToPrevChapter(upContent, upContentInPlace: false)
+            ReadBook.shared.moveToPrevChapter(upContent, upContentInPlace: false, startAtEnd: true)
         } else {
             guard dataSource.currentChapter != nil else { return false }
             ReadBook.shared.setPageIndex(dataSource.pageIndex - 1)

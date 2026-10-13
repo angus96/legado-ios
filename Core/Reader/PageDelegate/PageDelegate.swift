@@ -63,6 +63,7 @@ class PageDelegate {
     }
     
     func startScroll(startX: Int, startY: Int, dx: Int, dy: Int, animationSpeed: Int) {
+        guard viewWidth > 0, viewHeight > 0 else { return }
         let duration: CGFloat
         if dx != 0 {
             duration = CGFloat(animationSpeed * abs(dx)) / viewWidth
@@ -74,7 +75,7 @@ class PageDelegate {
         scrollerStartY = CGFloat(startY)
         scrollerDx = CGFloat(dx)
         scrollerDy = CGFloat(dy)
-        scrollerDuration = duration / 1000.0
+        scrollerDuration = max(0.001, duration / 1000.0)
         scrollerStartTime = CACurrentMediaTime()
         isFling = false
         isRunning = true
@@ -97,6 +98,7 @@ class PageDelegate {
         if computeScrollOffset() {
             readView?.setTouchPoint(scrollerCurrX, scrollerCurrY, anim: false)
         } else if isStarted {
+            readView?.setTouchPoint(scrollerCurrX, scrollerCurrY, anim: false)
             onAnimStop()
             stopScroll()
         }

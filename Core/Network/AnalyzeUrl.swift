@@ -576,7 +576,8 @@ class AnalyzeUrl {
                         headerMap: headerMap,
                         sourceRegex: sourceRegex,
                         javaScript: webJs ?? jsStr,
-                        delayTime: webViewDelayTime
+                        delayTime: webViewDelayTime,
+                        timeout: callTimeout ?? 30_000
                     )
                     strResponse = try await bwv.getStrResponse()
 
@@ -588,7 +589,8 @@ class AnalyzeUrl {
                         headerMap: headerMap,
                         sourceRegex: effectiveSourceRegex,
                         javaScript: webJs ?? jsStr,
-                        delayTime: webViewDelayTime
+                        delayTime: webViewDelayTime,
+                        timeout: callTimeout ?? 30_000
                     )
                     strResponse = try await bwv.getStrResponse()
                 }

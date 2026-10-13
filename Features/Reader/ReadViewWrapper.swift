@@ -9,21 +9,36 @@ struct ReadViewWrapper: UIViewRepresentable {
         let readView = ReadView()
         readView.callBack = context.coordinator
         readView.pageFactory = TextPageFactory(dataSource: ReadBook.shared)
+        readView.onSizeChange = { [weak viewModel] size in
+            viewModel?.configureTextLayout(size: size)
+        }
+        viewModel.configureTextLayout(size: UIScreen.main.bounds.size)
         updatePageDelegate(for: readView, coordinator: context.coordinator)
         return readView
     }
     
     func updateUIView(_ uiView: ReadView, context: Context) {
+        let background = UIColor(viewModel.backgroundColor)
+        uiView.backgroundColor = background
+        for page in [uiView.curPage, uiView.prevPage, uiView.nextPage] {
+            (page as? UIView)?.backgroundColor = background
+        }
+        viewModel.configureTextLayout(size: uiView.bounds.size)
         updatePageDelegate(for: uiView, coordinator: context.coordinator)
         uiView.upContent()
     }
     
+    static func dismantleUIView(_ uiView: ReadView, coordinator: Coordinator) {
+        uiView.dispose()
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
     
     private func updatePageDelegate(for readView: ReadView, coordinator: Coordinator) {
-        let pageAnimValue = viewModel.currentBook?.pageAnim ?? 0
+        let book = viewModel.currentBook
+        let pageAnimValue = book?.isDeleted == false ? (book?.pageAnim ?? 0) : 0
         let animationType = PageAnimationType(rawValue: pageAnimValue) ?? .cover
         if coordinator.animationType == animationType, readView.pageDelegate != nil { return }
         coordinator.animationType = animationType
@@ -41,6 +56,7 @@ struct ReadViewWrapper: UIViewRepresentable {
         case .none:
             readView.pageDelegate = NoAnimPageDelegate(readView: readView)
         }
+        readView.pageDelegate?.setViewSize(width: readView.bounds.width, height: readView.bounds.height)
     }
     
     class Coordinator: NSObject, ReadViewCallBack {

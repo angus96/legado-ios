@@ -16,7 +16,13 @@ class StabilityHandler(Handler):
     def do_GET(self):
         parsed = urlsplit(self.path)
         key = parse_qs(parsed.query).get("key", [""])[0]
-        if parsed.path == "/image.png":
+        if parsed.path.startswith("/chapter/"):
+            number = parsed.path.rsplit("/", 1)[-1]
+            paragraphs = [f"第{number}章正文，第{i}段。" + "这段文字用于检查阅读器是否真正显示正文，翻页后仍然能看清。" * 4 for i in range(50)]
+            body = json.dumps({"content": "\n".join(paragraphs)}, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+        elif parsed.path == "/image.png":
             with self.image_lock:
                 self.image_requests[key] = self.image_requests.get(key, 0) + 1
             time.sleep(0.1)

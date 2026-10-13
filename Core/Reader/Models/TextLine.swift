@@ -22,7 +22,11 @@ class TextLine {
     var exceed: Bool = false
     var onlyTextColumn: Bool = true
     
-    var textPage: TextPage = TextPage.empty
+    private weak var parent: TextPage?
+    var textPage: TextPage {
+        get { parent ?? TextPage.empty }
+        set { parent = newValue }
+    }
     var isLeftLine: Bool = true
     var searchResultColumnCount: Int = 0
     var isReadAloud: Bool = false {
@@ -111,7 +115,7 @@ class TextLine {
         ]
         
         let attributedString = NSAttributedString(string: text, attributes: attributes)
-        attributedString.draw(at: CGPoint(x: CGFloat(lineStart), y: y - font.lineHeight))
+        attributedString.draw(at: CGPoint(x: CGFloat(lineStart), y: y - font.ascender))
     }
     
     func invalidate() {

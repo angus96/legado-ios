@@ -65,7 +65,7 @@ struct BookshelfView: View {
             }
         }
         .sheet(isPresented: $showingSearch) {
-            NavigationStack { SearchView() }
+            SearchView()
         }
         .sheet(isPresented: $viewModel.showingAddUrl) {
             AddBookByUrlSheet(viewModel: viewModel)
@@ -76,9 +76,19 @@ struct BookshelfView: View {
         .task {
             await viewModel.loadBooks()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .NSManagedObjectContextObjectsDidChange,
+                                                         object: viewContext)) { _ in
+            viewModel.pruneUnavailableBooks()
+        }
         .refreshable {
             await viewModel.refreshBooks()
         }
+        .alert("书架操作失败", isPresented: Binding(
+            get: { viewModel.errorMessage != nil },
+            set: { if !$0 { viewModel.errorMessage = nil } }
+        )) {
+            Button("确定") { viewModel.errorMessage = nil }
+        } message: { Text(viewModel.errorMessage ?? "") }
     }
     
     private var groupTabs: some View {
@@ -187,7 +197,7 @@ struct BookshelfView: View {
                         let rowCount = (item.books.count + viewModel.gridColumns - 1) / viewModel.gridColumns
                         
                         LazyVGrid(columns: gridColumnsArray, spacing: 12) {
-                            ForEach(Array(item.books.enumerated()), id: \.element.bookId) { bookIndex, book in
+                            ForEach(Array(item.books.enumerated()), id: \.element.objectID) { bookIndex, book in
                                 let rowIndex = bookIndex / viewModel.gridColumns
                                 let isFirstRow = rowIndex == 0
                                 let isLastRow = rowIndex == rowCount - 1
@@ -284,7 +294,7 @@ struct BookshelfView: View {
         
         return ScrollView {
             LazyVGrid(columns: gridColumnsArray, spacing: 12) {
-                ForEach(Array(books.enumerated()), id: \.element.bookId) { index, book in
+                ForEach(Array(books.enumerated()), id: \.element.objectID) { index, book in
                     let rowIndex = index / viewModel.gridColumns
                     let isFirstRow = rowIndex == 0
                     let isLastRow = rowIndex == rowCount - 1
@@ -310,7 +320,7 @@ struct BookshelfView: View {
     // MARK: - 列表视图（参考 Android item_bookshelf_list）
     private func listView(_ books: [Book]) -> some View {
         List {
-            ForEach(Array(books.enumerated()), id: \.element.bookId) { index, book in
+            ForEach(Array(books.enumerated()), id: \.element.objectID) { index, book in
                 let isFirst = index == 0
                 let isLast = index == books.count - 1
                 
@@ -344,9 +354,9 @@ struct BookshelfView: View {
     @ViewBuilder
     private func bookContextMenu(_ book: Book) -> some View {
         Button {
-            // 置顶
+            viewModel.toggleTop(book)
         } label: {
-            Label("置顶", systemImage: "pin")
+            Label(book.order < 0 ? "取消置顶" : "置顶", systemImage: "pin")
         }
         
         Button {

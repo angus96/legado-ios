@@ -21,7 +21,16 @@ struct BookDetailView: View {
         _viewModel = StateObject(wrappedValue: BookDetailViewModel(book: book))
     }
     
+    @ViewBuilder
     var body: some View {
+        if book.isDeleted || book.managedObjectContext == nil {
+            Text("书籍已删除")
+        } else {
+            detailContent
+        }
+    }
+
+    private var detailContent: some View {
         ZStack {
             backgroundView
             
@@ -398,6 +407,7 @@ struct BookDetailView: View {
                     .frame(height: 50)
                     .background(Color.blue)
             }
+            .accessibilityIdentifier("bookDetail.read")
         }
         .background(Color.primary.colorInvert())
     }
@@ -563,8 +573,10 @@ class BookDetailViewModel: ObservableObject {
     }
     
     func deleteBook(_ book: Book) {
+        guard !book.isDeleted, book.managedObjectContext === context else { return }
         context.delete(book)
-        try? CoreDataStack.shared.save()
+        do { try context.save() }
+        catch { context.rollback() }
     }
     
     func toggleTop() {

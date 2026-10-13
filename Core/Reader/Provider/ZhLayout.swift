@@ -163,6 +163,13 @@ class ZhLayout {
             cwPre = cw
         }
         
+        // 循环只登记换行处，最后一行（包括不足一行的短段落）仍需提交。
+        if length > lineStart[line] {
+            ensureCapacity(line + 1)
+            lineStart[line + 1] = length
+            lineWidth[line] = lineW
+            line += 1
+        }
         lineCount = line
         
         for i in 0..<lineCount {

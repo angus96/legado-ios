@@ -32,6 +32,11 @@ jobs:
     - name: Verify HTTP and Database Pipeline
       run: python3 scripts/verify_domain_pipeline.py --libraries "$RUNNER_TEMP/legado-rules"
     
+    - name: Verify Search Scheduling and Aggregation
+      run: |
+        xcrun swiftc -O -parse-as-library Core/Search/SearchResultAccumulator.swift Core/Concurrency/ConcurrentSourceSearch.swift scripts/search_performance_checks.swift -o "$RUNNER_TEMP/search-checks"
+        "$RUNNER_TEMP/search-checks"
+
     - name: Install xcodeproj gem
       run: gem install xcodeproj
     

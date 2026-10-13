@@ -21,6 +21,7 @@ class ReadView: UIView, ReadViewProtocol {
     weak var callBack: ReadViewCallBack?
     var pageFactory: TextPageFactory?
     var pageDelegate: PageDelegate?
+    var onSizeChange: ((CGSize) -> Void)?
     
     var isScroll: Bool = false
     
@@ -83,7 +84,9 @@ class ReadView: UIView, ReadViewProtocol {
         addSubview(curView)
         addSubview(prevView)
         
+        // 翻页由父视图绘制同一份页面快照，子视图只保存页面数据和尺寸。
         prevView.isHidden = true
+        curView.isHidden = true
         nextView.isHidden = true
         
         backgroundColor = .white
@@ -97,11 +100,17 @@ class ReadView: UIView, ReadViewProtocol {
         (curPage as? UIView)?.frame = bounds
         (nextPage as? UIView)?.frame = bounds
         pageDelegate?.setViewSize(width: bounds.width, height: bounds.height)
+        onSizeChange?(bounds.size)
+        setNeedsDisplay()
     }
     
     override func draw(_ rect: CGRect) {
         guard let context = UIGraphicsGetCurrentContext() else { return }
-        pageDelegate?.onDraw(context)
+        if let delegate = pageDelegate, delegate.isRunning, !(delegate is NoAnimPageDelegate) {
+            delegate.onDraw(context)
+        } else {
+            (curPage as? PageView)?.draw(bounds)
+        }
     }
     
     private func setRect9x() {
@@ -337,6 +346,7 @@ class ReadView: UIView, ReadViewProtocol {
         }
         
         pageDelegate?.onScroll()
+        setNeedsDisplay()
         
         let offset = touchY - lastY
         touchY -= offset - offset.rounded()
@@ -364,11 +374,24 @@ class ReadView: UIView, ReadViewProtocol {
     }
     
     func upContent() {
+        curPage.textPage = pageFactory?.curPage
+        prevPage.textPage = pageFactory?.prevPage
+        nextPage.textPage = pageFactory?.nextPage
         (curPage as? UIView)?.setNeedsDisplay()
         (prevPage as? UIView)?.setNeedsDisplay()
         (nextPage as? UIView)?.setNeedsDisplay()
+        accessibilityLabel = curPage.textPage?.text
+        isAccessibilityElement = true
+        setNeedsDisplay()
     }
     
+    func dispose() {
+        cancelLongPressTimer()
+        pageDelegate?.onDestroy()
+        pageDelegate = nil
+        onSizeChange = nil
+    }
+
     func onScrollAnimStart() {
         isScroll = true
     }
@@ -407,8 +430,7 @@ class ReadView: UIView, ReadViewProtocol {
 
 /// 页面视图
 /// 一比一移植自 Android Legado PageView
-class PageView: UIView, PageViewProtocol {
-    var textPage: TextPage?
+class PageView: ContentTextView, PageViewProtocol {
     
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -429,9 +451,13 @@ class PageView: UIView, PageViewProtocol {
     }
     
     func screenshot() -> UIImage? {
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
         let renderer = UIGraphicsImageRenderer(size: bounds.size)
         return renderer.image { context in
-            layer.render(in: context.cgContext)
+            (backgroundColor ?? .white).setFill()
+            context.fill(bounds)
+            // 上一页和下一页处于隐藏状态，不能依赖隐藏 CALayer 的 render。
+            draw(bounds)
         }
     }
     
@@ -459,6 +485,7 @@ class PageView: UIView, PageViewProtocol {
     }
     
     func getLine(_ index: Int) -> TextLine {
-        return textPage?.lines[index] ?? TextLine.empty
+        guard let lines = textPage?.lines, lines.indices.contains(index) else { return TextLine.empty }
+        return lines[index]
     }
 }

@@ -253,12 +253,9 @@ struct SourceManageView: View {
     }
     
     private func batchDelete() {
-        for id in selectedSources {
-            if let source = viewModel.sources.first(where: { $0.sourceId == id }) {
-                viewModel.deleteSource(source)
-            }
-        }
+        let selected = viewModel.sources.filter { !$0.isDeleted && $0.managedObjectContext != nil && selectedSources.contains($0.sourceId) }
         selectedSources.removeAll()
+        viewModel.deleteSources(selected)
     }
 
     private func exportAllSources() {

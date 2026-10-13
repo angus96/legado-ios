@@ -45,13 +45,13 @@ class SourceEditViewModel: ObservableObject {
     }
     
     private func loadGroups() {
-        let request: NSFetchRequest<BookSource> = BookSource.fetchRequest()
+        let request = NSFetchRequest<NSDictionary>(entityName: "BookSource")
         request.propertiesToFetch = ["bookSourceGroup"]
         request.returnsDistinctResults = true
         request.resultType = .dictionaryResultType
         
         var groupSet = Set<String>()
-        if let results = try? context.fetch(request) as? [[String: Any]] {
+        if let results = try? context.fetch(request) {
             for dict in results {
                 if let g = dict["bookSourceGroup"] as? String, !g.isEmpty {
                     groupSet.insert(g)

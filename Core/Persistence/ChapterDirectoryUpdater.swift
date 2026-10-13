@@ -31,9 +31,15 @@ enum ChapterDirectoryUpdater {
                     previousIndex: Int(target.durChapterIndex), previousCount: Int(target.totalChapterNum),
                     title: target.durChapterTitle, newTitles: chapters.map(\.title)
                 )
+                let sameBook = original.bookUrl == metadata.bookUrl &&
+                    (target.source?.objectID == sourceID || original.origin == definition.bookSourceUrl ||
+                     original.origin == definition.sourceId.uuidString)
+                let oldPosition = target.durChapterPos
+                let oldChapter = (target.chapters as? Set<BookChapter>)?.first { $0.index == target.durChapterIndex }
+                let preservePosition = sameBook && oldChapter?.chapterUrl == chapters[index].url
                 var previousCache: [String: (Bool, String?, String?)] = [:]
                 if let oldChapters = target.chapters as? Set<BookChapter> {
-                    if target.source?.objectID == sourceID, original.bookUrl == metadata.bookUrl {
+                    if sameBook {
                         for chapter in oldChapters { previousCache[chapter.chapterUrl] = (chapter.isCached, chapter.cachePath, chapter.contentHash) }
                     }
                     for chapter in oldChapters { context.delete(chapter) }
@@ -64,7 +70,7 @@ enum ChapterDirectoryUpdater {
                 target.totalChapterNum = Int32(clamping: chapters.count)
                 target.durChapterIndex = Int32(clamping: index)
                 target.durChapterTitle = chapters[index].title
-                target.durChapterPos = 0
+                target.durChapterPos = preservePosition ? oldPosition : 0
                 target.downloadUrls = metadata.downloadUrls
                 target.wordCount = metadata.wordCount
                 try cancellation.check()

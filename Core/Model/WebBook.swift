@@ -48,7 +48,8 @@ class WebBook {
     static func searchBook(
         source: BookSourceDefinition,
         key: String,
-        page: Int = 1
+        page: Int = 1,
+        timeout: TimeInterval? = nil
     ) async throws -> [SearchBookResult] {
         try Task.checkCancellation()
         let source = try BookSourceSnapshot.capture(source)
@@ -57,16 +58,19 @@ class WebBook {
         }
         
         // 1. 构建搜索 URL
-        let analyzedUrl = AnalyzeUrl.analyze(
-            ruleUrl: searchUrl,
+        let analyzedUrl = AnalyzeUrl(
+            mUrl: searchUrl,
             key: key,
             page: page,
             baseUrl: source.bookSourceUrl,
-            source: source
+            source: source,
+            callTimeout: timeout.map { Int64(max(1, min(300, $0)) * 1000) }
         )
         
         // 2. 发起请求
-        var response = try await AnalyzeUrl.getResponseBody(analyzedUrl: analyzedUrl)
+        let rawResponse = try await analyzedUrl.getStrResponseAwait()
+        try Task.checkCancellation()
+        var response = (body: rawResponse.body ?? "", url: rawResponse.url)
         response = applyLoginCheckIfNeeded(source: source, response: response)
         let body = response.body
         let redirectUrl = response.url

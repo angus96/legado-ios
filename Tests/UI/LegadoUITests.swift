@@ -13,6 +13,16 @@ final class LegadoUITests: XCTestCase {
         app.staticTexts["测试书籍"].firstMatch.tap()
         let canvas = app.descendants(matching: .any)["reader.canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+        let visibleText = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "第1章正文"), object: canvas)
+        wait(for: [visibleText], timeout: 15)
+        let readerImage = XCTAttachment(screenshot: app.screenshot())
+        readerImage.name = "阅读页实际正文"
+        readerImage.lifetime = .keepAlways
+        add(readerImage)
+        let firstPage = canvas.label
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        let nextPage = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label != %@ AND label CONTAINS %@", firstPage, "正文"), object: canvas)
+        wait(for: [nextPage], timeout: 10)
         canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let change = app.buttons["reader.changeSource"]
         XCTAssertTrue(change.waitForExistence(timeout: 10))
@@ -47,5 +57,12 @@ final class LegadoUITests: XCTestCase {
         searched.name = "搜索结果加载完成"
         searched.lifetime = .keepAlways
         add(searched)
+        app.staticTexts["测试书籍"].firstMatch.tap()
+        let readButton = app.buttons["bookDetail.read"].firstMatch
+        XCTAssertTrue(readButton.waitForExistence(timeout: 10), "搜索结果应进入详情页")
+        readButton.tap()
+        XCTAssertTrue(canvas.waitForExistence(timeout: 10))
+        let searchedReader = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "正文"), object: canvas)
+        wait(for: [searchedReader], timeout: 15)
     }
 }

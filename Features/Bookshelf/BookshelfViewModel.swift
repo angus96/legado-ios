@@ -4,6 +4,11 @@ import Combine
 
 @MainActor
 final class BookshelfViewModel: ObservableObject {
+    private let context: NSManagedObjectContext
+
+    init(context: NSManagedObjectContext = CoreDataStack.shared.viewContext) {
+        self.context = context
+    }
     @Published var books: [Book] = []
     @Published var groups: [BookGroup] = []
     @Published var isLoading = false
@@ -66,7 +71,7 @@ final class BookshelfViewModel: ObservableObject {
     }
     
     private func fetchBooks() async throws -> [Book] {
-        let context = CoreDataStack.shared.viewContext
+        let context = self.context
         let sortMode = self.sortMode
         
         return try await context.perform {
@@ -84,12 +89,13 @@ final class BookshelfViewModel: ObservableObject {
                 request.sortDescriptors = [NSSortDescriptor(key: "author", ascending: true)]
             }
             
+            request.sortDescriptors?.insert(NSSortDescriptor(key: "order", ascending: true), at: 0)
             return try context.fetch(request)
         }
     }
     
     private func fetchGroups() async throws -> [BookGroup] {
-        let context = CoreDataStack.shared.viewContext
+        let context = self.context
         
         return try await context.perform {
             let request: NSFetchRequest<BookGroup> = BookGroup.fetchRequest()
@@ -100,41 +106,62 @@ final class BookshelfViewModel: ObservableObject {
     }
     
     func removeBook(_ book: Book) {
-        let bookId = book.bookId
-        Task { @MainActor in
-            let context = CoreDataStack.shared.viewContext
-            let request: NSFetchRequest<Book> = Book.fetchRequest()
-            request.predicate = NSPredicate(format: "bookId == %@", bookId as CVarArg)
-            request.fetchLimit = 1
-            
-            guard let bookToDelete = try? context.fetch(request).first else { return }
-            context.delete(bookToDelete)
-            try? context.save()
+        let objectID = book.objectID
+        // 在删除 managed object 前移除 UI 引用，重复点击不会读取已经清空的 bookId。
+        books.removeAll { $0.objectID == objectID || $0.isDeleted || $0.managedObjectContext == nil }
+        guard !book.isDeleted, book.managedObjectContext === context else { return }
+        context.delete(book)
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            errorMessage = "删除失败：\(error.localizedDescription)"
+            Task { await loadBooks() }
         }
     }
     
+    func toggleTop(_ book: Book) {
+        guard !book.isDeleted, book.managedObjectContext === context else { return }
+        book.order = book.order < 0 ? 0 : -1
+        do { try context.save(); Task { await loadBooks() } }
+        catch { context.rollback(); errorMessage = "置顶失败：\(error.localizedDescription)" }
+    }
+
     func updateBook(_ book: Book) {
-        Task { @MainActor in
-            let context = CoreDataStack.shared.viewContext
-            let request: NSFetchRequest<Book> = Book.fetchRequest()
-            request.predicate = NSPredicate(format: "bookId == %@", book.bookId as CVarArg)
-            request.fetchLimit = 1
-            
-            guard let bookToUpdate = try? context.fetch(request).first else { return }
-            bookToUpdate.lastCheckTime = Int64(Date().timeIntervalSince1970 * 1000)
-            try? context.save()
+        guard !book.isDeleted, book.managedObjectContext === context else { return }
+        Task {
+            do { try await refreshDirectory(book); await loadBooks() }
+            catch { errorMessage = "目录更新失败：\(error.localizedDescription)" }
         }
     }
-    
+
+    private func refreshDirectory(_ book: Book) async throws {
+        guard !book.isDeleted, book.managedObjectContext === context else { throw CancellationError() }
+        guard !book.isLocal else { return }
+        guard let source = try BookSourceResolver.resolve(for: book) else { throw ReaderError.noSource }
+        let original = try BookRequestSnapshot.capture(book)
+        let definition = try BookSourceSnapshot.capture(source)
+        let metadata = try await WebBook.getBookInfo(source: definition, book: original)
+        let chapters = try await WebBook.getChapterList(source: definition, book: metadata)
+        try await ChapterDirectoryUpdater.replace(book: book, source: source, original: original,
+                                                  metadata: metadata, definition: definition, chapters: chapters)
+        guard !book.isDeleted else { return }
+        book.lastCheckTime = Int64(Date().timeIntervalSince1970 * 1000)
+        try context.save()
+    }
+
     func updateAllToc() {
-        Task { @MainActor in
-            for book in books {
-                book.lastCheckTime = Int64(Date().timeIntervalSince1970 * 1000)
+        Task {
+            var failures = 0
+            for book in books where !book.isDeleted && book.managedObjectContext === context {
+                do { try await refreshDirectory(book) }
+                catch { failures += 1 }
             }
-            try? CoreDataStack.shared.save()
+            await loadBooks()
+            if failures > 0 { errorMessage = "\(failures) 本书的目录更新失败，已保留原目录。" }
         }
     }
-    
+
     func addBookByUrl(_ url: String) {
         guard !url.isEmpty else { return }
         Task { @MainActor in
@@ -157,5 +184,10 @@ final class BookshelfViewModel: ObservableObject {
                 errorMessage = "添加失败：\(error.localizedDescription)"
             }
         }
+    }
+
+    func pruneUnavailableBooks() {
+        let remaining = books.filter { !$0.isDeleted && $0.managedObjectContext != nil }
+        if remaining.count != books.count { books = remaining }
     }
 }

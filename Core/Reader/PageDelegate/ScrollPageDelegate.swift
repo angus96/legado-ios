@@ -1,178 +1,124 @@
 import UIKit
 
-/// 滚动翻页代理
-/// 一比一移植自 Android Legado ScrollPageDelegate.kt (186行)
-/// 原版路径: app/src/main/java/io/legado/app/ui/book/read/page/delegate/ScrollPageDelegate.kt
+/// 复用前后页面实现连续纵向滚动，跨页时同步阅读进度。
 class ScrollPageDelegate: PageDelegate {
-    
-    private let velocityDuration: CGFloat = 1000
-    private var velocityY: CGFloat = 0
-    private var lastEventY: CGFloat = 0
-    private var lastEventTime: CFTimeInterval = 0
-    var noAnim: Bool = false
-    
-    override init(readView: ReadViewProtocol) {
-        super.init(readView: readView)
+    private(set) var offset: CGFloat = 0
+    private var previousTouchY: CGFloat = 0
+    private var previousTime: TimeInterval = 0
+    private var velocity: CGFloat = 0
+    private var currentImage: UIImage?
+    private var previousImage: UIImage?
+    private var nextImage: UIImage?
+    private weak var renderedPage: TextPage?
+
+    override func setBitmap() {
+        currentImage = curPage.screenshot()
+        previousImage = prevPage.screenshot()
+        nextImage = nextPage.screenshot()
+        renderedPage = curPage.textPage
     }
-    
-    override func onAnimStart(animationSpeed: Int) {
-        readView?.onScrollAnimStart()
-        fling(
-            startX: 0, startY: Int(touchY),
-            velocityX: 0, velocityY: Int(velocityY),
-            minX: 0, maxX: 0,
-            minY: -10 * Int(viewHeight), maxY: 10 * Int(viewHeight)
-        )
+
+    override func onDown() {
+        super.onDown()
+        isRunning = offset != 0
     }
-    
-    override func onAnimStop() {
-        readView?.onScrollAnimStop()
-    }
-    
+
     override func onTouch(event: UITouch, view: UIView) {
-        let point = event.location(in: view)
-        let time = CACurrentMediaTime()
-        
+        let y = event.location(in: view).y
+        let now = CACurrentMediaTime()
         switch event.phase {
         case .began:
             abortAnim()
-            velocityY = 0
-            lastEventY = point.y
-            lastEventTime = time
+            previousTouchY = y
+            previousTime = now
+            velocity = 0
+            setBitmap()
         case .moved:
-            onScroll(event: event, view: view)
-            if time - lastEventTime > 0 {
-                velocityY = (point.y - lastEventY) / CGFloat(time - lastEventTime) * velocityDuration
-            }
-            lastEventY = point.y
-            lastEventTime = time
-        case .ended, .cancelled:
+            let delta = y - previousTouchY
+            if now > previousTime { velocity = max(-2500, min(2500, delta / (now - previousTime))) }
+            previousTouchY = y
+            previousTime = now
+            isMoved = true
+            scroll(by: delta)
+        case .ended:
+            readView?.setStartPoint(0, 0, anim: false)
             onAnimStart(animationSpeed: readView?.defaultAnimationSpeed ?? 300)
-        default:
-            break
+        case .cancelled:
+            abortAnim()
+        default: break
         }
     }
-    
-    override func onScroll() {
-        curPage.scroll(Int(touchY - lastY))
+
+    func scroll(by delta: CGFloat) {
+        guard viewHeight > 0, delta.isFinite else { return }
+        offset += delta
+        while offset <= -viewHeight {
+            guard readView?.pageFactory?.hasNext() == true else { offset = 0; break }
+            let before = curPage.textPage
+            readView?.fillPage(.next)
+            guard curPage.textPage !== before else { offset = 0; break }
+            offset += viewHeight
+            setBitmap()
+        }
+        while offset > 0 {
+            guard readView?.pageFactory?.hasPrev() == true else { offset = 0; break }
+            let before = curPage.textPage
+            readView?.fillPage(.prev)
+            guard curPage.textPage !== before else { offset = 0; break }
+            offset -= viewHeight
+            setBitmap()
+        }
+        if readView?.pageFactory?.hasNext() != true { offset = 0 }
+        isRunning = offset != 0 || isStarted
+        readView?.invalidate()
     }
-    
+
     override func onDraw(_ context: CGContext) {
+        if renderedPage !== curPage.textPage { setBitmap() }
+        if currentImage == nil { setBitmap() }
+        currentImage?.draw(in: CGRect(x: 0, y: offset, width: viewWidth, height: viewHeight))
+        nextImage?.draw(in: CGRect(x: 0, y: offset + viewHeight, width: viewWidth, height: viewHeight))
+        previousImage?.draw(in: CGRect(x: 0, y: offset - viewHeight, width: viewWidth, height: viewHeight))
     }
-    
-    private func onScroll(event: UITouch, view: UIView) {
-        let point = event.location(in: view)
-        let pointX = point.x
-        let pointY = point.y
-        
-        if isMoved || (readView?.isLongScreenShot() ?? false) {
-            readView?.setTouchPoint(pointX, pointY, anim: false)
-        }
-        
-        if !isMoved {
-            let deltaX = Int(pointX - startX)
-            let deltaY = Int(pointY - startY)
-            let distance = deltaX * deltaX + deltaY * deltaY
-            let slopSquare = readView?.pageSlopSquare2 ?? 0
-            isMoved = distance > slopSquare
-            if isMoved {
-                readView?.setStartPoint(point.x, point.y, anim: false)
-            }
-        }
-        
-        if isMoved {
-            isRunning = true
-        }
+
+    override func onScroll() { scroll(by: touchY - lastY) }
+
+    override func onAnimStart(animationSpeed: Int) {
+        guard viewHeight > 0, abs(velocity) > 20 else { return }
+        readView?.onScrollAnimStart()
+        fling(startX: 0, startY: 0, velocityX: 0, velocityY: Int(velocity),
+              minX: 0, maxX: 0, minY: -Int(viewHeight * 4), maxY: Int(viewHeight * 4))
     }
-    
-    override func onDestroy() {
-        super.onDestroy()
-    }
-    
-    override func abortAnim() {
-        readView?.onScrollAnimStop()
+
+    override func onAnimStop() { readView?.onScrollAnimStop() }
+
+    override func stopScroll() {
         isStarted = false
+        abortScrollerAnimation()
         isMoved = false
-        isRunning = false
-        if !isScrollerFinished {
-            readView?.isAbortAnim = true
-            abortScrollerAnimation()
-        } else {
-            readView?.isAbortAnim = false
-        }
+        isRunning = offset != 0
+        readView?.invalidate()
     }
-    
+
+    override func abortAnim() {
+        stopScroll()
+        readView?.onScrollAnimStop()
+        readView?.isAbortAnim = false
+    }
+
     override func nextPageByAnim(animationSpeed: Int) {
-        if readView?.isAbortAnim == true {
-            readView?.isAbortAnim = false
-            return
-        }
-        if noAnim {
-            curPage.scroll(calcNextPageOffset())
-            return
-        }
+        guard hasNext(), viewHeight > 0 else { return }
+        abortAnim()
+        setBitmap()
         readView?.setStartPoint(0, 0, anim: false)
-        startScroll(startX: 0, startY: 0, dx: 0, dy: calcNextPageOffset(), animationSpeed: animationSpeed)
+        startScroll(startX: 0, startY: 0, dx: 0, dy: -Int(viewHeight), animationSpeed: animationSpeed)
     }
-    
+
     override func prevPageByAnim(animationSpeed: Int) {
-        if readView?.isAbortAnim == true {
-            readView?.isAbortAnim = false
-            return
-        }
-        if noAnim {
-            curPage.scroll(calcPrevPageOffset())
-            return
-        }
+        guard hasPrev(), viewHeight > 0 else { return }
+        abortAnim()
+        setBitmap()
         readView?.setStartPoint(0, 0, anim: false)
-        startScroll(startX: 0, startY: 0, dx: 0, dy: calcPrevPageOffset(), animationSpeed: animationSpeed)
-    }
-    
-    private func calcNextPageOffset() -> Int {
-        let visibleHeight = ChapterProvider.shared.visibleHeight
-        guard let book = ReadBook.shared.book else {
-            return -Int(visibleHeight)
-        }
-        
-        if book.type == 2 {
-            return -Int(visibleHeight)
-        }
-        
-        guard let visiblePage = readView?.getCurVisiblePage() else {
-            return -Int(visibleHeight)
-        }
-        
-        if visiblePage.lines.isEmpty {
-            return -Int(visibleHeight)
-        }
-        
-        let lastLineTop = Int(visiblePage.lines.last?.lineTop ?? 0)
-        let paddingTop = ChapterProvider.shared.paddingTop
-        let offset = lastLineTop - Int(paddingTop)
-        return -offset
-    }
-    
-    private func calcPrevPageOffset() -> Int {
-        let visibleHeight = ChapterProvider.shared.visibleHeight
-        guard let book = ReadBook.shared.book else {
-            return Int(visibleHeight)
-        }
-        
-        if book.type == 2 {
-            return Int(visibleHeight)
-        }
-        
-        guard let visiblePage = readView?.getCurVisiblePage() else {
-            return Int(visibleHeight)
-        }
-        
-        if visiblePage.lines.isEmpty {
-            return Int(visibleHeight)
-        }
-        
-        let firstLineBottom = Int(visiblePage.lines.first?.lineBottom ?? 0)
-        let paddingTop = ChapterProvider.shared.paddingTop
-        let offset = Int(visibleHeight) - (firstLineBottom - Int(paddingTop))
-        return offset
+        startScroll(startX: 0, startY: 0, dx: 0, dy: Int(viewHeight), animationSpeed: animationSpeed)
     }
 }

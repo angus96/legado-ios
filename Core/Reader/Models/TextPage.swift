@@ -41,7 +41,11 @@ class TextPage {
     var isCompleted: Bool = false
     var hasReadAloudSpan: Bool = false
     
-    var textChapter: TextChapter = TextChapter.empty
+    private weak var parent: TextChapter?
+    var textChapter: TextChapter {
+        get { parent ?? TextChapter.empty }
+        set { parent = newValue }
+    }
     
     func addLine(_ line: TextLine) {
         line.textPage = self

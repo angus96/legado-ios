@@ -1,203 +1,147 @@
 import Foundation
 import CoreData
+import Combine
 
 @MainActor
 class SearchViewModel: ObservableObject {
-    @Published var searchText: String = ""
+    typealias SearchResult = BookSearchResult
+    typealias SearchOperation = (BookSourceSnapshot, String) async throws -> [SearchBookResult]
+
+    @Published var searchText = ""
     @Published var searchResults: [SearchResult] = []
     @Published var isSearching = false
     @Published var errorMessage: String?
     @Published var selectedSources: [BookSource] = []
-    
-    private var ruleEngine: RuleEngine = RuleEngine()
+    @Published private(set) var completedSourceCount = 0
+    @Published private(set) var totalSourceCount = 0
+    @Published private(set) var failedSourceCount = 0
+    @Published private(set) var sourceErrors: [String] = []
+    @Published private(set) var hasSearched = false
+    @Published private(set) var wasCancelled = false
+
+    private let operation: SearchOperation
+    private let sourceTimeout: TimeInterval
     private var searchTask: Task<Void, Never>?
     private var searchID = UUID()
 
-    init() {
-        loadDefaultSources()
+    init(context: NSManagedObjectContext = CoreDataStack.shared.viewContext,
+         sourceTimeout: TimeInterval = 12,
+         operation: @escaping SearchOperation = { source, keyword in
+             try await WebBook.searchBook(source: source, key: keyword, timeout: 12)
+         }) {
+        self.operation = operation
+        self.sourceTimeout = sourceTimeout
+        let request = BookSource.fetchRequest()
+        request.predicate = NSPredicate(format: "enabled == YES AND searchUrl != nil AND searchUrl != ''")
+        request.sortDescriptors = [NSSortDescriptor(key: "weight", ascending: false),
+                                   NSSortDescriptor(key: "respondTime", ascending: true)]
+        selectedSources = (try? context.fetch(request)) ?? []
     }
 
-    private func loadDefaultSources() {
-        do {
-            let sources = try CoreDataStack.shared.viewContext.fetch(BookSource.fetchRequest())
-            selectedSources = sources.filter { $0.enabled && $0.searchUrl != nil }
-        } catch {
-            selectedSources = []
-        }
-    }
-    
     func cancelSearch() {
         searchID = UUID()
         searchTask?.cancel()
         searchTask = nil
+        wasCancelled = isSearching
         isSearching = false
     }
-    
-    struct SearchResult: Identifiable {
-        let id = UUID()
-        let name: String
-        let author: String
-        let coverUrl: String?
-        let intro: String?
-        let kind: String?
-        let wordCount: String? = nil
-        let lastChapter: String?
-        let sourceName: String
-        let sourceId: UUID
-        let bookUrl: String
-        var sourceCount: Int = 1
-        
-        var displayName: String {
-            name.trimmingCharacters(in: .whitespaces)
-        }
-        
-        var displayAuthor: String {
-            author.trimmingCharacters(in: .whitespaces)
-        }
-    }
-    
-    func search(keyword: String, sources: [BookSource]) async {
-        guard !keyword.isEmpty else {
-            cancelSearch()
-            searchResults = []
-            isSearching = false
-            return
-        }
 
-        searchTask?.cancel()
+    func clearSearch() {
+        cancelSearch()
+        searchText = ""
+        searchResults = []
+        hasSearched = false
+        errorMessage = nil
+        completedSourceCount = 0
+        totalSourceCount = 0
+        failedSourceCount = 0
+        sourceErrors = []
+    }
+
+    func search(keyword: String, sources: [BookSource]) async {
+        let keyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyword.isEmpty else { clearSearch(); return }
+        cancelSearch()
         let requestID = UUID()
         searchID = requestID
-        searchTask = Task { [keyword] in
-            guard self.searchID == requestID, !Task.isCancelled else { return }
-            isSearching = true
-            searchResults.removeAll()
-            errorMessage = nil
+        searchResults = []
+        errorMessage = nil
+        sourceErrors = []
+        completedSourceCount = 0
+        failedSourceCount = 0
+        hasSearched = true
+        wasCancelled = false
 
-            defer {
-                if self.searchID == requestID {
-                    isSearching = false
-                    searchTask = nil
-                }
-            }
-
-            let enabledSources = sources.filter { $0.enabled && $0.searchUrl != nil }
-            var partialBuckets: [(Int, [SearchResult])] = []
-            var sourceErrors: [(Int, String)] = []
-
-            await ConcurrentSourceSearch.run(Array(enabledSources.enumerated())) { item -> (Int, [SearchResult], String?) in
-                let (index, source) = item
+        // 数据库内容在所属主队列一次性拷贝，并发请求只接收普通值。
+        var seen = Set<UUID>()
+        let definitions = sources.filter {
+            !$0.isDeleted && $0.managedObjectContext != nil && $0.enabled &&
+            !($0.searchUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        }.sorted {
+            if $0.weight != $1.weight { return $0.weight > $1.weight }
+            return $0.respondTime < $1.respondTime
+        }.compactMap { try? BookSourceSnapshot.capture($0) }.filter { seen.insert($0.sourceId).inserted }
+        totalSourceCount = definitions.count
+        guard !definitions.isEmpty else {
+            errorMessage = "没有可搜索的书源，请先启用书源，再选择搜索范围。"
+            return
+        }
+        isSearching = true
+        let operation = self.operation
+        let timeout = sourceTimeout
+        let task = Task { [weak self] in
+            var accumulator = SearchResultAccumulator()
+            var completed = 0
+            var failures = 0
+            var errors: [String] = []
+            var lastPublish: TimeInterval = 0
+            await ConcurrentSourceSearch.run(definitions, limit: 12) { source -> (BookSourceSnapshot, [SearchBookResult], String?) in
                 do {
-                    let results = try await self.searchInSource(keyword: keyword, source: source)
-                    return (index, results, nil)
+                    let results = try await ConcurrentSourceSearch.withTimeout(seconds: timeout) {
+                        try await operation(source, keyword)
+                    }
+                    return (source, results, nil)
                 } catch is CancellationError {
-                    return (index, [], nil)
+                    return (source, [], nil)
                 } catch {
-                    let message = "\(source.bookSourceName)：\(error.localizedDescription)"
-                    return (index, [], message)
+                    return (source, [], "\(source.bookSourceName)：\(error.localizedDescription)")
                 }
-            } onResult: { index, results, error in
-                guard !Task.isCancelled, self.searchID == requestID else { return }
-                partialBuckets.append((index, results))
-                if !results.isEmpty {
-                    let merged = partialBuckets.sorted { $0.0 < $1.0 }.flatMap { $0.1 }
-                    self.searchResults = self.aggregateResults(merged)
-                }
+            } onResult: { source, results, error in
+                guard let self, self.searchID == requestID, !Task.isCancelled else { return }
+                completed += 1
                 if let error {
-                    sourceErrors.append((index, error))
+                    failures += 1
+                    if errors.count < 8 { errors.append(error) }
+                }
+                accumulator.append(results.map {
+                    SearchResult(name: $0.name, author: $0.author, coverUrl: $0.coverUrl,
+                                 intro: $0.intro, kind: $0.kind, wordCount: $0.wordCount,
+                                 lastChapter: $0.lastChapter, sourceName: source.bookSourceName,
+                                 sourceId: source.sourceId, bookUrl: $0.bookUrl)
+                })
+                let now = ProcessInfo.processInfo.systemUptime
+                if now - lastPublish >= 0.12 || completed == definitions.count ||
+                    (self.searchResults.isEmpty && !accumulator.results.isEmpty) {
+                    self.searchResults = accumulator.results
+                    self.completedSourceCount = completed
+                    self.failedSourceCount = failures
+                    self.sourceErrors = errors
+                    lastPublish = now
                 }
             }
-
-            guard !Task.isCancelled, self.searchID == requestID else { return }
-
-            let merged = partialBuckets
-                .sorted { $0.0 < $1.0 }
-                .flatMap { $0.1 }
-
-            searchResults = aggregateResults(merged)
-
-            if !sourceErrors.isEmpty {
-                errorMessage = sourceErrors
-                    .sorted { $0.0 < $1.0 }
-                    .map(\.1)
-                    .joined(separator: "\n")
-            }
+            guard let self, self.searchID == requestID, !Task.isCancelled else { return }
+            self.searchResults = accumulator.results
+            self.completedSourceCount = completed
+            self.failedSourceCount = failures
+            self.sourceErrors = errors
+            self.isSearching = false
+            self.searchTask = nil
         }
-
-        await searchTask?.value
-    }
-    
-    private func searchInSource(keyword: String, source: BookSource) async throws -> [SearchResult] {
-        let results = try await WebBook.searchBook(source: source, key: keyword)
-        
-        return results.map { searchBook in
-            SearchResult(
-name: searchBook.name,
-                author: searchBook.author,
-                coverUrl: searchBook.coverUrl,
-                intro: searchBook.intro,
-                kind: searchBook.kind,
-                lastChapter: searchBook.lastChapter,
-                sourceName: source.bookSourceName,
-                sourceId: source.sourceId,
-                bookUrl: searchBook.bookUrl
-            )
-        }
+        searchTask = task
+        await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
     }
 
-    private func aggregateResults(_ input: [SearchResult]) -> [SearchResult] {
-        var buckets: [String: SearchResult] = [:]
-        var sourceBuckets: [String: Set<UUID>] = [:]
-        var order: [String] = []
-
-        for item in input {
-            let normalizedName = item.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let normalizedAuthor = item.author.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let key = normalizedAuthor.isEmpty ? normalizedName : "\(normalizedName)|\(normalizedAuthor)"
-
-            if var existing = buckets[key] {
-                var sourceSet = sourceBuckets[key] ?? []
-                sourceSet.insert(item.sourceId)
-                sourceBuckets[key] = sourceSet
-                existing.sourceCount = sourceSet.count
-                if (existing.kind?.isEmpty ?? true), let kind = item.kind, !kind.isEmpty {
-existing = SearchResult(
-                        name: existing.name,
-                        author: existing.author,
-                        coverUrl: existing.coverUrl ?? item.coverUrl,
-                        intro: existing.intro ?? item.intro,
-                        kind: kind,
-                        lastChapter: existing.lastChapter ?? item.lastChapter,
-                        sourceName: existing.sourceName,
-                        sourceId: existing.sourceId,
-                        bookUrl: existing.bookUrl,
-                        sourceCount: existing.sourceCount
-                    )
-                } else {
-existing = SearchResult(
-                        name: existing.name,
-                        author: existing.author,
-                        coverUrl: existing.coverUrl ?? item.coverUrl,
-                        intro: existing.intro ?? item.intro,
-                        kind: existing.kind,
-                        lastChapter: existing.lastChapter ?? item.lastChapter,
-                        sourceName: existing.sourceName,
-                        sourceId: existing.sourceId,
-                        bookUrl: existing.bookUrl,
-                        sourceCount: existing.sourceCount
-                    )
-                }
-                buckets[key] = existing
-            } else {
-                buckets[key] = item
-                sourceBuckets[key] = [item.sourceId]
-                order.append(key)
-            }
-        }
-
-        return order.compactMap { buckets[$0] }
-    }
-    
-func addToBookshelf(result: SearchResult) async throws -> Book {
+    func addToBookshelf(result: SearchResult) async throws -> Book {
         let context = CoreDataStack.shared.viewContext
         
         let bookData = BookImportData(

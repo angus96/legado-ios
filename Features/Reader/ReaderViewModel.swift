@@ -8,6 +8,7 @@
 import Foundation
 import SwiftUI
 import CoreData
+import UIKit
 
 @MainActor
 class ReaderViewModel: ObservableObject, ReadViewCallBack {
@@ -15,6 +16,13 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     
     // MARK: - ReadBookCallBack 协议实现
     func upContent() {
+        guard readBook.callBack === self else { return }
+        isLoading = readBook.isLoadingCurrentChapter
+        if let message = readBook.msg {
+            errorMessage = message
+        } else if readBook.curTextChapter != nil {
+            errorMessage = nil
+        }
         curTextChapter = readBook.curTextChapter
         prevTextChapter = readBook.prevTextChapter
         nextTextChapter = readBook.nextTextChapter
@@ -25,10 +33,15 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
             currentChapterIndex = readBook.durChapterIndex
             currentChapter = chapters[safe: currentChapterIndex]
             if !pages.isEmpty {
+                isSynchronizingProgress = true
                 currentPageIndex = min(max(0, readBook.durChapterPos), pages.count - 1)
+                isSynchronizingProgress = false
                 durChapterPos = Int32(clamping: currentPageIndex)
                 chapterContent = textChapter.getContent()
             }
+        } else {
+            totalPages = 0
+            chapterContent = nil
         }
     }
     
@@ -110,6 +123,39 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     private var loadTask: Task<Void, Never>?
     private var chapterLoadID = UUID()
     private var bookLoadID = UUID()
+    private var layoutMetrics: LayoutMetrics?
+    private var isSynchronizingProgress = false
+
+    private struct LayoutMetrics: Equatable {
+        let size: CGSize
+        let fontSize: CGFloat
+        let lineSpacing: CGFloat
+        let paragraphSpacing: CGFloat
+        let padding: EdgeInsets
+    }
+
+    func configureTextLayout(size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        let metrics = LayoutMetrics(size: size, fontSize: fontSize, lineSpacing: lineSpacing,
+                                    paragraphSpacing: paragraphSpacing, padding: pagePadding)
+        let changed = layoutMetrics != nil && layoutMetrics != metrics
+        layoutMetrics = metrics
+        let provider = ChapterProvider.shared
+        let font = UIFont.systemFont(ofSize: fontSize)
+        provider.updateStyle(titleFont: .systemFont(ofSize: fontSize + 2, weight: .bold),
+                             contentFont: font, textColor: UIColor(textColor),
+                             lineSpacing: 1 + lineSpacing / font.lineHeight,
+                             paragraphSpacing: paragraphSpacing)
+        provider.updatePadding(left: pagePadding.leading, top: pagePadding.top,
+                               right: pagePadding.trailing, bottom: pagePadding.bottom)
+        provider.updateViewSize(width: size.width, height: size.height)
+        if changed, readBook.callBack === self, readBook.book != nil {
+            Task { @MainActor [weak self] in
+                guard let self, self.layoutMetrics == metrics, self.readBook.callBack === self else { return }
+                self.readBook.loadContent(resetPageOffset: false, forceRebuild: true)
+            }
+        }
+    }
     var cacheManager: ChapterCacheManager { ChapterCacheManager.shared }
 
     init() {
@@ -186,6 +232,7 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
         bookLoadID = requestID
         chapterLoadID = UUID()
         isLoading = true
+        errorMessage = nil
         DebugLogger.shared.log("ReaderViewModel.loadBook 开始: bookId=\(bookId)")
 
         loadTask = Task {
@@ -224,13 +271,14 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
                     durChapterPos = book.durChapterPos
                     currentChapter = chapters[chapterIndex]
                     
-                    try await loadChapter(at: chapterIndex, restorePageIndex: Int(book.durChapterPos))
-                    
-                    guard !Task.isCancelled, bookLoadID == requestID else { return }
-                    readBook.loadContent(resetPageOffset: false)
+                    if book.isHardcover {
+                        try await loadChapter(at: chapterIndex, restorePageIndex: Int(book.durChapterPos))
+                    } else {
+                        readBook.loadContent(resetPageOffset: false)
+                    }
                 }
                 
-                if bookLoadID == requestID { isLoading = false }
+                if bookLoadID == requestID { isLoading = readBook.isLoadingCurrentChapter }
             } catch is CancellationError {
                 DebugLogger.shared.log("ReaderViewModel: 加载被取消")
                 if bookLoadID == requestID { isLoading = false }
@@ -254,8 +302,10 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
         loadTask = nil
         if readBook.callBack === self {
             readBook.callBack = nil
+            readBook.releaseAndCancel()
+            readBook.clearTextChapter()
+            readBook.book = nil
         }
-        readBook.releaseAndCancel()
         Task { @MainActor in
             cacheManager.cancelPreload()
         }
@@ -550,10 +600,14 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     }
 
     private func updatePagingProgressIfNeeded() {
+        guard !isSynchronizingProgress else { return }
         let clamped = max(0, currentPageIndex)
         let newPos = Int32(clamping: clamped)
         if durChapterPos != newPos {
             durChapterPos = newPos
+        }
+        if readBook.callBack === self, readBook.durChapterPos != clamped {
+            readBook.setPageIndex(clamped)
         }
         saveProgress()
     }
@@ -890,13 +944,13 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     
     // MARK: - 保存进度
     func saveProgress() {
-        guard let book = currentBook else { return }
+        guard let book = currentBook, !book.isDeleted, book.managedObjectContext != nil else { return }
         
         book.durChapterIndex = Int32(clamping: max(0, currentChapterIndex))
         book.durChapterTime = Int64(Date().timeIntervalSince1970)
         book.durChapterPos = durChapterPos
         
-        if let chapter = currentChapter {
+        if let chapter = currentChapter, !chapter.isDeleted, chapter.managedObjectContext != nil {
             book.durChapterTitle = chapter.title
         }
         

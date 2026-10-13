@@ -619,11 +619,15 @@ final class BookOrganizeViewModel: ObservableObject {
 
     func deleteSelectedBooks() {
         let context = CoreDataStack.shared.viewContext
-        for book in books where selectedBookIds.contains(book.bookId) {
+        let selected = books.filter { !$0.isDeleted && $0.managedObjectContext != nil && selectedBookIds.contains($0.bookId) }
+        let objectIDs = Set(selected.map(\.objectID))
+        books.removeAll { objectIDs.contains($0.objectID) }
+        selectedBookIds.removeAll()
+        for book in selected {
             context.delete(book)
         }
-        try? context.save()
-        selectedBookIds.removeAll()
+        do { try context.save() }
+        catch { context.rollback() }
         Task { await loadData() }
     }
 

@@ -40,6 +40,9 @@ class ReadBook: ObservableObject {
     var msg: String?
     
     private var loadGeneration = UUID()
+    private var startAtLastPage = false
+    private var relayoutPosition: Int?
+    var isLoadingCurrentChapter: Bool { loadingChapters.contains(durChapterIndex) }
     private var loadingChapters: Set<Int> = []
     private var chapterLoadingTasks: [Int: Task<Void, Never>] = [:]
     
@@ -50,6 +53,9 @@ class ReadBook: ObservableObject {
     func resetData(_ book: Book) {
         releaseAndCancel()
         self.book = book
+        msg = nil
+        startAtLastPage = false
+        relayoutPosition = nil
         chapterSize = book.chapterSize
         simulatedChapterSize = chapterSize
         durChapterIndex = Int(book.durChapterIndex)
@@ -113,8 +119,12 @@ class ReadBook: ObservableObject {
         loadingChapters.removeAll()
     }
     
-    func loadContent(resetPageOffset: Bool = true) {
-        guard let book else { return }
+    func loadContent(resetPageOffset: Bool = true, forceRebuild: Bool = false) {
+        guard let book, !book.isDeleted, book.managedObjectContext != nil else { return }
+        if forceRebuild {
+            relayoutPosition = curTextChapter?.getReadLength(durChapterPos)
+            clearTextChapter()
+        }
         releaseAndCancel()
         chapterSize = max(0, Int(book.totalChapterNum))
         guard chapterSize > 0 else { return }
@@ -123,15 +133,27 @@ class ReadBook: ObservableObject {
         msg = nil
         let current = durChapterIndex
         let generation = loadGeneration
-        for index in max(0, current - 1)...min(chapterSize - 1, current + 1) {
-            loadingChapters.insert(index)
+        if curTextChapter?.position != current { curTextChapter = nil }
+        if prevTextChapter?.position != current - 1 { prevTextChapter = nil }
+        if nextTextChapter?.position != current + 1 { nextTextChapter = nil }
+        let available = [curTextChapter, prevTextChapter, nextTextChapter].compactMap { $0 }.filter { $0.isCompleted }
+        let indices = [current, current + 1, current - 1].filter { index in
+            index >= 0 && index < chapterSize && !available.contains { $0.position == index }
+        }
+        loadingChapters = Set(indices)
+        if let chapter = curTextChapter { restorePosition(in: chapter) }
+        callBack?.upContent()
+        for index in indices {
             chapterLoadingTasks[index] = Task { [weak self] in
                 guard let self else { return }
                 do {
                     let chapter = try await loadChapter(index: index, book: book)
                     try Task.checkCancellation()
                     guard loadGeneration == generation, self.book?.objectID == book.objectID else { return }
-                    if index == current { curTextChapter = chapter }
+                    if index == current {
+                        curTextChapter = chapter
+                        restorePosition(in: chapter)
+                    }
                     else if index < current { prevTextChapter = chapter }
                     else { nextTextChapter = chapter }
                     loadingChapters.remove(index)
@@ -195,8 +217,21 @@ class ReadBook: ObservableObject {
         return replaced.components(separatedBy: .newlines).filter { !$0.isEmpty }
     }
 
+    private func restorePosition(in chapter: TextChapter) {
+        if startAtLastPage {
+            durChapterPos = max(0, chapter.lastIndex)
+        } else if let position = relayoutPosition {
+            durChapterPos = max(0, chapter.getPageIndexByCharIndex(position))
+        } else {
+            durChapterPos = min(max(0, durChapterPos), max(0, chapter.lastIndex))
+        }
+        startAtLastPage = false
+        relayoutPosition = nil
+    }
+
     func setPageIndex(_ index: Int) {
-        durChapterPos = index
+        durChapterPos = min(max(0, index), max(0, (curTextChapter?.pageSize ?? 1) - 1))
+        saveReadProgress()
         callBack?.upContent()
     }
     
@@ -217,10 +252,11 @@ class ReadBook: ObservableObject {
         saveReadProgress()
     }
     
-    func moveToPrevChapter(_ upContent: Bool, upContentInPlace: Bool) {
+    func moveToPrevChapter(_ upContent: Bool, upContentInPlace: Bool, startAtEnd: Bool = false) {
         guard durChapterIndex > 0 else { return }
         durChapterIndex -= 1
-        durChapterPos = 0
+        startAtLastPage = startAtEnd
+        durChapterPos = startAtEnd ? max(0, prevTextChapter?.lastIndex ?? 0) : 0
         chapterChanged = true
         
         nextTextChapter = curTextChapter
@@ -228,7 +264,7 @@ class ReadBook: ObservableObject {
         prevTextChapter = nil
         
         if upContent {
-            loadContent(resetPageOffset: !upContentInPlace)
+            loadContent(resetPageOffset: !upContentInPlace && !startAtEnd)
         }
         
         saveReadProgress()
@@ -239,7 +275,7 @@ class ReadBook: ObservableObject {
     }
     
     func saveReadProgress() {
-        guard let book = book else { return }
+        guard let book = book, !book.isDeleted else { return }
         guard let context = book.managedObjectContext else { return }
         let index = Int32(clamping: max(0, durChapterIndex))
         let position = Int32(clamping: max(0, durChapterPos))

@@ -25,7 +25,14 @@ class ContentTextView: UIView {
         
         context.saveGState()
         
-        textPage.draw(in: self, context: context, relativeOffset: 0)
+        if textPage.lines.isEmpty {
+            (textPage.text as NSString).draw(in: bounds.insetBy(dx: 20, dy: 20), withAttributes: [
+                .font: ChapterProvider.shared.contentFont,
+                .foregroundColor: ChapterProvider.shared.textColor
+            ])
+        } else {
+            textPage.draw(in: self, context: context, relativeOffset: 0)
+        }
         
         context.restoreGState()
     }
