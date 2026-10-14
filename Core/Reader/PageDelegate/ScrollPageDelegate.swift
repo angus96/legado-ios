@@ -2,6 +2,11 @@ import UIKit
 
 /// 复用前后页面实现连续纵向滚动，跨页时同步阅读进度。
 class ScrollPageDelegate: PageDelegate {
+    private let pageLayers = CALayer()
+    private let previousLayer = CALayer()
+    private let currentLayer = CALayer()
+    private let nextLayer = CALayer()
+    override var drawsInLayer: Bool { true }
     private(set) var offset: CGFloat = 0
     private var previousTouchY: CGFloat = 0
     private var previousTime: TimeInterval = 0
@@ -24,6 +29,16 @@ class ScrollPageDelegate: PageDelegate {
     private var snapshots: [ObjectIdentifier: Snapshot] = [:]
     private var appearance: Appearance?
 
+    override init(readView: ReadViewProtocol) {
+        super.init(readView: readView)
+        pageLayers.addSublayer(previousLayer)
+        pageLayers.addSublayer(currentLayer)
+        pageLayers.addSublayer(nextLayer)
+        (readView as? UIView)?.layer.addSublayer(pageLayers)
+    }
+
+    override func onContentUpdated() { setBitmap() }
+
     func invalidateImages() {
         currentImage = nil
         previousImage = nil
@@ -32,11 +47,18 @@ class ScrollPageDelegate: PageDelegate {
     }
 
     override func setViewSize(width: CGFloat, height: CGFloat) {
-        if width != viewWidth || height != viewHeight { invalidateImages() }
+        let changed = width != viewWidth || height != viewHeight
+        if changed {
+            abortAnim()
+            offset = 0
+            invalidateImages()
+        }
         super.setViewSize(width: width, height: height)
+        if changed { setBitmap() }
     }
 
     override func setBitmap() {
+        guard viewWidth > 0, viewHeight > 0 else { return }
         let provider = ChapterProvider.shared
         let updated = Appearance(size: CGSize(width: viewWidth, height: viewHeight),
                                  font: provider.contentFont, titleFont: provider.titleFont,
@@ -53,6 +75,16 @@ class ScrollPageDelegate: PageDelegate {
         nextImage = image(for: nextPage)
         let visible = Set([curPage, prevPage, nextPage].compactMap { $0.textPage }.map(ObjectIdentifier.init))
         snapshots = snapshots.filter { visible.contains($0.key) }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        previousLayer.frame = CGRect(x: 0, y: -viewHeight, width: viewWidth, height: viewHeight)
+        currentLayer.frame = CGRect(x: 0, y: 0, width: viewWidth, height: viewHeight)
+        nextLayer.frame = CGRect(x: 0, y: viewHeight, width: viewWidth, height: viewHeight)
+        previousLayer.contents = previousImage?.cgImage
+        currentLayer.contents = currentImage?.cgImage
+        nextLayer.contents = nextImage?.cgImage
+        pageLayers.transform = CATransform3DMakeTranslation(0, offset, 0)
+        CATransaction.commit()
     }
 
     private func image(for view: PageViewProtocol) -> UIImage? {
@@ -116,17 +148,15 @@ class ScrollPageDelegate: PageDelegate {
         }
         if readView?.pageFactory?.hasNext() != true { offset = 0 }
         isRunning = offset != 0 || isStarted
-        readView?.invalidate()
+        // 每帧只移动已绘制图层，不再把两张整屏图片重新画进 UIView。
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pageLayers.transform = CATransform3DMakeTranslation(0, offset, 0)
+        CATransaction.commit()
     }
 
     override func onDraw(_ context: CGContext) {
-        setBitmap()
-        currentImage?.draw(in: CGRect(x: 0, y: offset, width: viewWidth, height: viewHeight))
-        if offset < 0 {
-            nextImage?.draw(in: CGRect(x: 0, y: offset + viewHeight, width: viewWidth, height: viewHeight))
-        } else if offset > 0 {
-            previousImage?.draw(in: CGRect(x: 0, y: offset - viewHeight, width: viewWidth, height: viewHeight))
-        }
+        // 滚动页面由 CALayer 合成，无需在 draw(_:) 中重绘。
     }
 
     override func onScroll() { scroll(by: touchY - lastY) }
@@ -157,6 +187,7 @@ class ScrollPageDelegate: PageDelegate {
     override func onDestroy() {
         super.onDestroy()
         readView?.onScrollAnimStop()
+        pageLayers.removeFromSuperlayer()
         invalidateImages()
     }
 

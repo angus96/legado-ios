@@ -22,6 +22,8 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>CADisableMinimumFrameDurationOnPhone</key>
+    <true/>
     <!-- 用户添加的书源可能使用 HTTP，或从 HTTPS 重定向至 HTTP。 -->
     <key>NSAppTransportSecurity</key>
     <dict>

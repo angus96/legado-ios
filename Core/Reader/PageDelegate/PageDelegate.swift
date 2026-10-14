@@ -17,6 +17,9 @@ class PageDelegate {
     var isCancel: Bool = false
     var isRunning: Bool = false
     var isStarted: Bool = false
+    var drawsInLayer: Bool { false }
+
+    func onContentUpdated() {}
     
     private var selectedOnDown: Bool = false
     private var displayLink: CADisplayLink?
@@ -94,8 +97,8 @@ class PageDelegate {
         }
     }
     
-    func computeScroll() {
-        if computeScrollOffset() {
+    func computeScroll(at timestamp: CFTimeInterval = CACurrentMediaTime()) {
+        if computeScrollOffset(at: timestamp) {
             readView?.setTouchPoint(scrollerCurrX, scrollerCurrY, anim: false)
         } else if isStarted {
             readView?.setTouchPoint(scrollerCurrX, scrollerCurrY, anim: false)
@@ -107,13 +110,16 @@ class PageDelegate {
     private var scrollerCurrX: CGFloat = 0
     private var scrollerCurrY: CGFloat = 0
     
-    private func computeScrollOffset() -> Bool {
-        let elapsed = CACurrentMediaTime() - scrollerStartTime
+    private func computeScrollOffset(at timestamp: CFTimeInterval = CACurrentMediaTime()) -> Bool {
+        let elapsed = max(0, timestamp - scrollerStartTime)
         
         if isFling {
             let deceleration: CGFloat = 5000
-            let x = scrollerStartX + scrollerVelocityX * elapsed - 0.5 * (scrollerVelocityX > 0 ? deceleration : -deceleration) * elapsed * elapsed
-            let y = scrollerStartY + scrollerVelocityY * elapsed - 0.5 * (scrollerVelocityY > 0 ? deceleration : -deceleration) * elapsed * elapsed
+            // 最后一帧不能越过停止时刻，否则位移会倒退。
+            let tx = min(elapsed, abs(scrollerVelocityX) / deceleration)
+            let ty = min(elapsed, abs(scrollerVelocityY) / deceleration)
+            let x = scrollerStartX + scrollerVelocityX * tx - 0.5 * (scrollerVelocityX > 0 ? deceleration : -deceleration) * tx * tx
+            let y = scrollerStartY + scrollerVelocityY * ty - 0.5 * (scrollerVelocityY > 0 ? deceleration : -deceleration) * ty * ty
             
             scrollerCurrX = min(flingMaxX, max(flingMinX, x))
             scrollerCurrY = min(flingMaxY, max(flingMinY, y))
@@ -148,6 +154,9 @@ class PageDelegate {
     private func startDisplayLink() {
         stopDisplayLink()
         displayLink = CADisplayLink(target: self, selector: #selector(displayLinkFired))
+        let maximumFPS = Float((readView as? UIView)?.window?.screen.maximumFramesPerSecond ?? UIScreen.main.maximumFramesPerSecond)
+        displayLink?.preferredFrameRateRange = CAFrameRateRange(minimum: min(60, maximumFPS),
+                                                               maximum: maximumFPS, preferred: maximumFPS)
         displayLink?.add(to: .main, forMode: .common)
     }
     
@@ -157,7 +166,7 @@ class PageDelegate {
     }
     
     @objc private func displayLinkFired() {
-        computeScroll()
+        computeScroll(at: displayLink?.targetTimestamp ?? CACurrentMediaTime())
         readView?.invalidate()
     }
     

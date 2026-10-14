@@ -124,7 +124,7 @@ final class ReadingAndSearchTests: XCTestCase {
         let paragraphs = [String(repeating: "山川，。星河《（日月）》！？", count: 30),
                           String(repeating: "Latin Wi e\u{301} 👨‍👩‍👧‍👦中文；：", count: 20)]
         for width in [320.0, 393, 430] {
-            for size in [18.0, 24, 30] {
+            for size in [18.0, 19, 24, 30] {
                 for spacing in [0.0, 2, 5] {
                     provider.updateViewSize(width: width, height: 720)
                     provider.updatePadding(left: 16, top: 20, right: 16, bottom: 20)
@@ -143,6 +143,78 @@ final class ReadingAndSearchTests: XCTestCase {
                     XCTAssertEqual(String(text.getContent().filter { !$0.isWhitespace }),
                                    String(("测试章节" + paragraphs.joined()).filter { !$0.isWhitespace }))
                 }
+            }
+        }
+    }
+
+    func testScreenshotParagraphKeepsActualGlyphsInsideBothMargins() async throws {
+        let database = try container()
+        let book = makeBook(in: database.viewContext)
+        let provider = ChapterProvider.shared
+        let oldSize = CGSize(width: provider.viewWidth, height: provider.viewHeight)
+        let oldFont = provider.contentFont
+        let oldTitleFont = provider.titleFont
+        let oldColor = provider.textColor
+        let oldSpacing = provider.letterSpacing
+        let oldIndent = ReadBookConfig.paragraphIndent
+        let oldZhLayout = ReadBookConfig.useZhLayout
+        let oldPadding = [provider.paddingLeft, provider.paddingTop, provider.paddingRight, provider.paddingBottom]
+        defer {
+            provider.updateViewSize(width: oldSize.width, height: oldSize.height)
+            provider.updateStyle(titleFont: oldTitleFont, contentFont: oldFont, textColor: oldColor)
+            provider.letterSpacing = oldSpacing
+            ReadBookConfig.paragraphIndent = oldIndent
+            ReadBookConfig.useZhLayout = oldZhLayout
+            provider.updatePadding(left: oldPadding[0], top: oldPadding[1], right: oldPadding[2], bottom: oldPadding[3])
+        }
+        provider.updateViewSize(width: 393, height: 852)
+        provider.updatePadding(left: 16, top: 20, right: 16, bottom: 20)
+        provider.updateStyle(titleFont: .systemFont(ofSize: 21), contentFont: .systemFont(ofSize: 19), textColor: .black)
+        provider.letterSpacing = 0
+        ReadBookConfig.paragraphIndent = .four
+        let paragraphs = [
+            "一道数尺长寒光从朴刀中卷射而出，青光闪动下，当即便有三条青蛇被从中一刀两截的被劈飞，接着“砰砰”两声，其余两条青蛇也被大汉身上的白色光罩弹了开来，并在大汉刀光一个翻卷下，同样被砍成两段。",
+            "这些青色长蛇一个照面便被虬髯大汉击溃，并就此现出原形，竟是几簇绿色杂草所化。",
+            "虬髯大汉哼了一声，正要继续冲入草丛，突然面色一动，将朴刀一收的站在了原地。"
+        ]
+        for chineseLayout in [true, false] {
+            ReadBookConfig.useZhLayout = chineseLayout
+            let text = chapter()
+            let layout = TextChapterLayout(textChapter: text, textPages: [], book: book,
+                                          bookContent: BookContent(textList: paragraphs))
+            await layout.startLayout()
+            XCTAssertNil(layout.exception)
+            XCTAssertEqual(String(text.getContent().filter { !$0.isWhitespace }),
+                           String(("测试章节" + paragraphs.joined()).filter { !$0.isWhitespace }))
+            let pageView = PageView(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 3
+            format.opaque = true
+            for page in text.pages {
+                pageView.setPage(page)
+                let image = UIGraphicsImageRenderer(size: pageView.bounds.size, format: format).image { context in
+                    UIColor.white.setFill()
+                    context.fill(pageView.bounds)
+                    // 直接绘制原始页面，不裁剪边距，避免用遮住文字的方式通过检查。
+                    pageView.draw(pageView.bounds)
+                }
+                let pixels = try rgba(image)
+                let width = try XCTUnwrap(image.cgImage).width
+                let height = try XCTUnwrap(image.cgImage).height
+                var outsideInk = 0
+                var insideInk = 0
+                for y in 0..<height {
+                    for x in 0..<width where pixels[(y * width + x) * 4] < 180 {
+                        if x < 47 || x >= width - 47 { outsideInk += 1 }
+                        else { insideInk += 1 }
+                    }
+                }
+                XCTAssertEqual(outsideInk, 0, "实际绘制的字形不能侵入左右 16 点边距")
+                XCTAssertGreaterThan(insideInk, 500, "正文必须实际绘出，不能只保证空白边距")
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "截图段落-393点-19号字-中文排版\(chineseLayout)-第\(page.index + 1)页"
+                attachment.lifetime = .keepAlways
+                add(attachment)
             }
         }
     }
@@ -181,7 +253,7 @@ final class ReadingAndSearchTests: XCTestCase {
         ReadBook.shared.msg = nil
         let source = FixturePageSource(chapter: text)
         source.pageIndex = 1
-        let view = ReadView(frame: CGRect(x: 0, y: 0, width: 390, height: 720))
+        let view = CountingReadView(frame: CGRect(x: 0, y: 0, width: 390, height: 720))
         let pages = (0..<3).map { _ in CountingPageView(frame: view.bounds) }
         view.prevPage = pages[0]; view.curPage = pages[1]; view.nextPage = pages[2]
         view.pageFactory = TextPageFactory(dataSource: source)
@@ -197,8 +269,13 @@ final class ReadingAndSearchTests: XCTestCase {
         view.upContent(); scroll.setBitmap()
         XCTAssertEqual(pages.reduce(0) { $0 + $1.renderCount }, 4, "跨一页只需绘制一个新相邻页")
         view.setStartPoint(0, 0, anim: false)
+        let redrawsBeforeScrolling = view.redrawRequests
+        let snapshotsBeforeScrolling = pages.reduce(0) { $0 + $1.renderCount }
         for frame in 1...30 { view.setTouchPoint(0, -CGFloat(frame) * 0.25, anim: false) }
         XCTAssertEqual(scroll.offset, -7.5, accuracy: 0.001, "惯性滚动的小数位移不能在每帧取整后累积误差")
+        XCTAssertEqual(view.redrawRequests, redrawsBeforeScrolling, "滚动每一帧不能请求 UIView 整屏重绘")
+        XCTAssertEqual(pages.reduce(0) { $0 + $1.renderCount }, snapshotsBeforeScrolling,
+                       "页面内容未变化时，移动不能生成新截图")
         pages.forEach { $0.backgroundColor = .black }
         scroll.setBitmap()
         XCTAssertEqual(pages.reduce(0) { $0 + $1.renderCount }, 7, "换主题后应重新绘制")
@@ -435,5 +512,14 @@ private final class CountingPageView: PageView {
     override func screenshot() -> UIImage? {
         renderCount += 1
         return super.screenshot()
+    }
+}
+
+@MainActor
+private final class CountingReadView: ReadView {
+    private(set) var redrawRequests = 0
+    override func setNeedsDisplay() {
+        redrawRequests += 1
+        super.setNeedsDisplay()
     }
 }

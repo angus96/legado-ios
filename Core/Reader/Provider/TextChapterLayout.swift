@@ -8,6 +8,7 @@
 
 import UIKit
 import Foundation
+import CoreText
 
 /// 异步章节排版器
 /// 一比一移植自 Android Legado TextChapterLayout
@@ -336,9 +337,7 @@ class TextChapterLayout {
             ? String(repeating: ChapterProvider.indentChar, count: ReadBookConfig.paragraphIndent.length)
                 + String(text.drop(while: { $0.isWhitespace }))
             : text
-        // 测量文本宽度
-        // 使用 iOS TextKit 进行布局
-        let lines = createTextLayout(text: text, font: font, width: visibleWidth)
+        let lines = provider.createTextLayout(text: text, font: font, width: visibleWidth)
         
         // 标题 Y 轴居中处理
         let isSingleImageStyle = imageStyle?.uppercased() == "SINGLE"
@@ -354,7 +353,7 @@ class TextChapterLayout {
         // 逐行处理
         for layoutLine in lines {
             try Task.checkCancellation()
-            if CACurrentMediaTime() - lastLayoutYield >= 0.004 {
+            if CACurrentMediaTime() - lastLayoutYield >= 0.002 {
                 // 后台预排相邻章节时也让主线程及时处理滚动和屏幕刷新。
                 try await Task.sleep(nanoseconds: 1_000_000)
                 lastLayoutYield = CACurrentMediaTime()
@@ -368,28 +367,28 @@ class TextChapterLayout {
             let lineText = layoutLine.text
             textLine.text = lineText
             
-            // 计算该行的字符宽度
-            let lineWords = ChapterProvider.shared.measureText(lineText, font: font)
-            let lineWidths = measureTextWidths(lineText, font: font)
-            let lineDesiredWidth = lineWidths.reduce(0, +)
-            
             // 根据行位置选择排版方式
             let startX: CGFloat
             if isTitle && (emptyContent || isVolumeTitle || isSingleImageStyle) {
                 // 标题居中
-                startX = (visibleWidth - lineDesiredWidth) / 2
+                startX = (visibleWidth - layoutLine.width) / 2
             } else {
                 startX = 0
             }
-            
-            // 添加字符到行
-            await addCharsToLine(
-                words: lineWords,
-                widths: lineWidths,
-                textLine: textLine,
-                startX: startX,
-                isTitle: isTitle
-            )
+
+            textLine.startX = Float(absStartX + startX + layoutLine.drawOffsetX)
+            textLine.coreTextLine = layoutLine.coreTextLine
+            // 选区位置与绘制共用字形坐标；UTF-16 索引不能拆开 emoji 和组合字符。
+            var characterOffset = layoutLine.utf16Start
+            for character in lineText {
+                let nextOffset = characterOffset + String(character).utf16.count
+                let leading = CTLineGetOffsetForStringIndex(layoutLine.coreTextLine, characterOffset, nil)
+                let trailing = CTLineGetOffsetForStringIndex(layoutLine.coreTextLine, nextOffset, nil)
+                textLine.addColumn(TextColumn(start: textLine.startX + Float(min(leading, trailing)),
+                                              end: textLine.startX + Float(max(leading, trailing)),
+                                              charData: String(character)))
+                characterOffset = nextOffset
+            }
             
             // 计算行位置
             calcTextLinePosition(textLine, sbLength: stringBuilder.length)
@@ -413,52 +412,6 @@ class TextChapterLayout {
         }
         stringBuilder.append("\n")
         durY += paragraphSpacing
-    }
-    
-    // MARK: - 添加字符到行
-    private func addCharsToLine(
-        words: [String],
-        widths: [CGFloat],
-        textLine: TextLine,
-        startX: CGFloat,
-        isTitle: Bool
-    ) async {
-        let provider = ChapterProvider.shared
-        let absStartX = provider.paddingLeft
-        let indentCharWidth = provider.indentCharWidth
-        let paragraphIndent = ReadBookConfig.paragraphIndent
-        let textFullJustify = ReadBookConfig.textFullJustify
-        
-        var x = startX
-        textLine.startX = Float(absStartX + startX)
-        
-        // 缩进已经参与整段测量，不能再替换每一行开头的正文字符。
-        await addCharsToLineNatural(words: words, widths: widths, textLine: textLine, startX: startX)
-    }
-
-    // MARK: - 自然排版
-    private func addCharsToLineNatural(
-        words: [String],
-        widths: [CGFloat],
-        textLine: TextLine,
-        startX: CGFloat
-    ) async {
-        let absStartX = ChapterProvider.shared.paddingLeft
-        var x = startX
-        
-        for (index, char) in words.enumerated() {
-            let cw = widths[index]
-            let x1 = x + cw
-            
-            textLine.addColumn(
-                TextColumn(
-                    start: Float(absStartX + x),
-                    end: Float(absStartX + x1),
-                    charData: char
-                )
-            )
-            x = x1
-        }
     }
     
     // MARK: - 计算行位置
@@ -487,72 +440,6 @@ class TextChapterLayout {
         
         textLine.chapterPosition = lastChapterPos + sbLength
         textLine.pagePosition = sbLength
-    }
-    
-    private var textMeasure: TextMeasure?
-    
-    // MARK: - 文本测量工具（使用TextMeasure缓存优化）
-    private func measureTextWidths(_ text: String, font: UIFont) -> [CGFloat] {
-        if textMeasure == nil || textMeasure!.font != font {
-            textMeasure = TextMeasure(font: font)
-        }
-        let result = textMeasure!.measureTextSplit(text: text)
-        return result.widths.map { $0 + ChapterProvider.shared.letterSpacing }
-    }
-    
-    private func measureTextSplit(_ text: String, widthsArray: [CGFloat], start: Int = 0) -> ([String], [CGFloat]) {
-        if textMeasure == nil {
-            textMeasure = TextMeasure(font: ChapterProvider.shared.contentFont)
-        }
-        let result = textMeasure!.measureTextSplit(text: text)
-        return (result.strings, result.widths.map { $0 + ChapterProvider.shared.letterSpacing })
-    }
-    
-    private func isZeroWidthChar(_ char: Character) -> Bool {
-        guard let scalar = char.unicodeScalars.first else { return false }
-        let code = scalar.value
-        return code == 8203 || code == 8204 || code == 8205 || code == 8288
-    }
-    
-    private func createTextLayout(text: String, font: UIFont, width: CGFloat) -> [TextLayoutLine] {
-        let useZhLayout = ReadBookConfig.useZhLayout
-        
-        if useZhLayout {
-            return createZhTextLayout(text: text, font: font, width: width)
-        } else {
-            return ChapterProvider.shared.createTextLayout(text: text, font: font, width: width)
-        }
-    }
-    
-    private func createZhTextLayout(text: String, font: UIFont, width: CGFloat) -> [TextLayoutLine] {
-        if textMeasure == nil || textMeasure!.font != font {
-            textMeasure = TextMeasure(font: font)
-        }
-        
-        let result = textMeasure!.measureTextSplit(text: text)
-        let zhLayout = ZhLayout(
-            words: result.strings,
-            widths: result.widths.map { $0 + ChapterProvider.shared.letterSpacing },
-            width: width
-        )
-        
-        var lines: [TextLayoutLine] = []
-        let characters = Array(text)
-        for i in 0..<zhLayout.count {
-            let start = zhLayout.getLineStart(i)
-            let end = zhLayout.getLineEnd(i)
-            
-            let lineText = String(characters[start..<end])
-            
-            lines.append(TextLayoutLine(
-                text: lineText,
-                start: start,
-                end: end,
-                width: zhLayout.getLineWidth(i)
-            ))
-        }
-        
-        return lines
     }
     
     // MARK: - 页面完成回调

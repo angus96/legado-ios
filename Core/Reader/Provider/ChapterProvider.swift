@@ -8,6 +8,7 @@
 
 import UIKit
 import Foundation
+import CoreText
 
 /// 排版进度监听协议
 protocol LayoutProgressListener: AnyObject {
@@ -135,65 +136,73 @@ class ChapterProvider {
         }
     }
     
-    // MARK: - 创建 TextLayout (iOS 使用 TextKit)
+    // MARK: - 换行与绘制共用同一份 CoreText 排版
     func createTextLayout(text: String, font: UIFont, width: CGFloat) -> [TextLayoutLine] {
-        guard !text.isEmpty, width > 0 else { return [] }
+        guard !text.isEmpty, width > 0, width.isFinite else { return [] }
         let attributedString = NSAttributedString(
             string: text,
-            attributes: [.font: font, .kern: letterSpacing]
+            attributes: [.font: font, .kern: letterSpacing,
+                         NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true]
         )
-        
-        let textStorage = NSTextStorage(attributedString: attributedString)
-        let textContainer = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
-        textContainer.lineFragmentPadding = 0
-        
-        let layoutManager = NSLayoutManager()
-        layoutManager.addTextContainer(textContainer)
-        textStorage.addLayoutManager(layoutManager)
-        
-        var lines: [TextLayoutLine] = []
-        var currentY: CGFloat = 0
-        var prevGlyphRange = NSRange(location: 0, length: 0)
-        
-        layoutManager.enumerateLineFragments(forGlyphRange: layoutManager.glyphRange(for: textContainer)) { rect, usedRect, textContainer, glyphRange, stop in
-            let charRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
-            let lineText = (text as NSString).substring(with: charRange)
-            
-            let line = TextLayoutLine(
-                text: lineText,
-                rect: rect,
-                baseline: usedRect.origin.y + usedRect.size.height,
-                glyphRange: glyphRange,
-                charRange: charRange
-            )
-            lines.append(line)
+        let typesetter = CTTypesetterCreateWithAttributedString(attributedString)
+        let characters = Array(text)
+        var utf16Offsets = [0]
+        for character in characters {
+            utf16Offsets.append(utf16Offsets.last! + String(character).utf16.count)
         }
-        
+
+        var lines: [TextLayoutLine] = []
+        var start = 0
+        while start < characters.count {
+            let suggestedEnd = utf16Offsets[start] + CTTypesetterSuggestLineBreak(typesetter, utf16Offsets[start], Double(width))
+            var end = start + 1
+            while end < characters.count && utf16Offsets[end + 1] <= suggestedEnd { end += 1 }
+
+            func avoidHangingPunctuation(_ proposedEnd: Int) -> Int {
+                guard ReadBookConfig.useZhLayout, proposedEnd < characters.count else { return proposedEnd }
+                var candidate = proposedEnd
+                while candidate > start + 1 &&
+                    (ZhLayout.postPanc.contains(String(characters[candidate])) ||
+                     ZhLayout.prePanc.contains(String(characters[candidate - 1]))) {
+                    candidate -= 1
+                }
+                return candidate
+            }
+            end = avoidHangingPunctuation(end)
+            func makeLine(_ end: Int) -> TextLayoutLine {
+                let range = CFRange(location: utf16Offsets[start], length: utf16Offsets[end] - utf16Offsets[start])
+                return TextLayoutLine(text: String(characters[start..<end]),
+                                      coreTextLine: CTTypesetterCreateLine(typesetter, range),
+                                      utf16Start: range.location)
+            }
+            var line = makeLine(end)
+            // 系统换行可能允许标点悬挂；按最终字形的宽度收回，不能占用右边距。
+            while line.width > width && end > start + 1 {
+                end = avoidHangingPunctuation(end - 1)
+                line = makeLine(end)
+            }
+            lines.append(line)
+            start = end
+        }
         return lines
     }
 }
 
-/// 文本排版行信息 (iOS TextKit 辅助结构)
+/// 保留实际绘制的字形，避免逐字估宽与整行绘制产生不同结果。
 struct TextLayoutLine {
     let text: String
-    let rect: CGRect
-    let baseline: CGFloat
-    let glyphRange: NSRange
-    let charRange: NSRange
-    
-    init(text: String, rect: CGRect, baseline: CGFloat, glyphRange: NSRange, charRange: NSRange) {
+    let coreTextLine: CTLine
+    let utf16Start: Int
+    let width: CGFloat
+    let drawOffsetX: CGFloat
+
+    init(text: String, coreTextLine: CTLine, utf16Start: Int) {
         self.text = text
-        self.rect = rect
-        self.baseline = baseline
-        self.glyphRange = glyphRange
-        self.charRange = charRange
-    }
-    
-    init(text: String, start: Int, end: Int, width: CGFloat) {
-        self.text = text
-        self.rect = CGRect(x: 0, y: 0, width: width, height: 0)
-        self.baseline = 0
-        self.glyphRange = NSRange(location: 0, length: end - start)
-        self.charRange = NSRange(location: start, length: end - start)
+        self.coreTextLine = coreTextLine
+        self.utf16Start = utf16Start
+        let advance = CGFloat(CTLineGetTypographicBounds(coreTextLine, nil, nil, nil))
+        let ink = CTLineGetImageBounds(coreTextLine, nil)
+        drawOffsetX = ink.isNull ? 0 : max(0, -ink.minX)
+        width = max(advance, ink.isNull ? 0 : ink.maxX) + drawOffsetX
     }
 }

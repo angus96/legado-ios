@@ -90,6 +90,7 @@ class ReadView: UIView, ReadViewProtocol {
         nextView.isHidden = true
         
         backgroundColor = .white
+        clipsToBounds = true
         isUserInteractionEnabled = true
     }
     
@@ -99,12 +100,13 @@ class ReadView: UIView, ReadViewProtocol {
         (prevPage as? UIView)?.frame = CGRect(x: -bounds.width, y: 0, width: bounds.width, height: bounds.height)
         (curPage as? UIView)?.frame = bounds
         (nextPage as? UIView)?.frame = bounds
-        pageDelegate?.setViewSize(width: bounds.width, height: bounds.height)
         onSizeChange?(bounds.size)
-        setNeedsDisplay()
+        pageDelegate?.setViewSize(width: bounds.width, height: bounds.height)
+        invalidate()
     }
     
     override func draw(_ rect: CGRect) {
+        guard pageDelegate?.drawsInLayer != true else { return }
         guard let context = UIGraphicsGetCurrentContext() else { return }
         if let delegate = pageDelegate, delegate.isRunning, !(delegate is NoAnimPageDelegate) {
             delegate.onDraw(context)
@@ -331,7 +333,7 @@ class ReadView: UIView, ReadViewProtocol {
         touchY = y
         
         if anim {
-            setNeedsDisplay()
+            invalidate()
         }
     }
     
@@ -342,16 +344,16 @@ class ReadView: UIView, ReadViewProtocol {
         touchY = y
         
         if anim {
-            setNeedsDisplay()
+            invalidate()
         }
         
         pageDelegate?.onScroll()
-        setNeedsDisplay()
+        invalidate()
         
     }
     
     func invalidate() {
-        setNeedsDisplay()
+        if pageDelegate?.drawsInLayer != true { setNeedsDisplay() }
     }
     
     func fillPage(_ direction: PageDirection) {
@@ -380,7 +382,8 @@ class ReadView: UIView, ReadViewProtocol {
         (nextPage as? UIView)?.setNeedsDisplay()
         accessibilityLabel = curPage.textPage?.text
         isAccessibilityElement = true
-        setNeedsDisplay()
+        pageDelegate?.onContentUpdated()
+        invalidate()
     }
     
     func dispose() {

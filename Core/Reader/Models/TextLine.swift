@@ -1,4 +1,5 @@
 import UIKit
+import CoreText
 
 class TextLine {
     var text: String = ""
@@ -15,6 +16,7 @@ class TextLine {
     var isParagraphEnd: Bool = false
     var isImage: Bool = false
     var startX: Float = 0.0
+    var coreTextLine: CTLine?
     var indentSize: Int = 0
     var extraLetterSpacing: Float = 0.0
     var extraLetterSpacingOffsetX: Float = 0.0
@@ -108,6 +110,16 @@ class TextLine {
         }
         
         let y = CGFloat(lineBase - lineTop)
+
+        if let coreTextLine {
+            context.textMatrix = .identity
+            context.translateBy(x: CGFloat(startX), y: y)
+            context.scaleBy(x: 1, y: -1)
+            context.textPosition = .zero
+            context.setFillColor(textColor.cgColor)
+            CTLineDraw(coreTextLine, context)
+            return
+        }
         
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
