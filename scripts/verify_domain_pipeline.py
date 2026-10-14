@@ -58,6 +58,7 @@ def verify(directory, args):
         "Core/Model/WebBook.swift", "Core/Model/BookSourceSnapshot.swift", "Core/Model/BookRequestSnapshot.swift",
         "Core/Persistence/Book+CoreDataClass.swift", "Core/Persistence/BookSource+CoreDataClass.swift",
         "Core/Persistence/BookChapter+CoreDataClass.swift", "Core/Persistence/Cookie+CoreDataClass.swift",
+        "Core/Persistence/Bookmark+CoreDataClass.swift",
         "Core/Persistence/ReadConfig.swift", "Core/Persistence/ManagedObjectAccess.swift",
         "Core/Persistence/BookSourceResolver.swift", "Core/Persistence/ChapterDirectoryUpdater.swift",
         "Core/Reader/ReadingProgressMapper.swift", "Core/Network/AnalyzeUrl.swift", "Core/Network/StrResponse.swift",

@@ -25,6 +25,10 @@ enum StabilityTestBootstrap {
             if ProcessInfo.processInfo.environment["LEGADO_SEARCH_PREVIEW"] == "1" {
                 source["searchUrl"] = base + "/search-preview"
             }
+            if ProcessInfo.processInfo.environment["LEGADO_DIRECTORY_REGRESSION"] == "1" {
+                source["enabled"] = kind == "current"
+                source["searchUrl"] = base + "/search-directory"
+            }
             if kind != "missing" {
                 source["enabledExplore"] = true
                 source["exploreUrl"] = "测试分类::" + base + "/explore"

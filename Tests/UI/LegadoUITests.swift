@@ -2,6 +2,34 @@ import XCTest
 
 final class LegadoUITests: XCTestCase {
     @MainActor
+    func testSingleSourceIsVisibleAndDirectoryStartsWithItsIntroduction() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["LEGADO_UI_TESTS"] = "1"
+        app.launchEnvironment["LEGADO_DIRECTORY_REGRESSION"] = "1"
+        app.launchEnvironment["LEGADO_FIXTURE_URL"] = "http://127.0.0.1:8766"
+        app.launchArguments = ["-com.apple.CoreData.ConcurrencyDebug", "1"]
+        app.launch()
+        XCTAssertTrue(app.buttons["bookshelf.search"].waitForExistence(timeout: 15))
+        app.buttons["bookshelf.search"].tap()
+        let keyword = app.textFields["search.keyword"]
+        XCTAssertTrue(keyword.waitForExistence(timeout: 5))
+        keyword.tap(); keyword.typeText("目录\n")
+        XCTAssertTrue(app.staticTexts["目录测试书"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertEqual(app.staticTexts["search.sourceCount"].firstMatch.label, "1 个书源")
+        capture(app, name: "搜索结果-单书源")
+        app.staticTexts["目录测试书"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["目录测试简介"].firstMatch.waitForExistence(timeout: 15))
+        app.buttons["bookDetail.chapters"].tap()
+        XCTAssertTrue(app.buttons["toc.chapter.0"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["toc.chapter.0"].label.contains("引言"))
+        XCTAssertTrue(app.buttons["toc.chapter.1"].label.contains("第1章"))
+        XCTAssertTrue(app.buttons["toc.chapter.4"].label.contains("第4章"))
+        XCTAssertFalse(app.buttons["toc.chapter.5"].exists)
+        capture(app, name: "目录-保留引言并从第一章开始")
+    }
+
+    @MainActor
     func testSearchDetailOnlyAddsWhenRequestedAndKeepsItsChapters() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -21,7 +49,7 @@ final class LegadoUITests: XCTestCase {
             XCTAssertTrue(app.buttons["bookDetail.add"].waitForExistence(timeout: 10))
         }
         func closeDetailAndSearch() {
-            app.navigationBars.buttons["搜索"].tap()
+            app.navigationBars["书籍详情"].buttons["搜索"].tap()
             app.buttons["关闭"].firstMatch.tap()
             XCTAssertTrue(app.buttons["bookshelf.search"].waitForExistence(timeout: 5))
         }
@@ -29,7 +57,9 @@ final class LegadoUITests: XCTestCase {
             let button = app.buttons["bookDetail.chapters"]
             wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: button)], timeout: 15)
             button.tap()
-            XCTAssertTrue(app.staticTexts["第3章"].firstMatch.waitForExistence(timeout: 15))
+            let chapter = app.buttons["toc.chapter.2"]
+            XCTAssertTrue(chapter.waitForExistence(timeout: 15))
+            XCTAssertTrue(chapter.label.contains("第3章"))
         }
         XCTAssertTrue(app.buttons["bookshelf.search"].waitForExistence(timeout: 15))
         openDetail()
@@ -54,7 +84,7 @@ final class LegadoUITests: XCTestCase {
         openDetail()
         XCTAssertTrue(app.buttons["bookDetail.add"].label.contains("已在书架"))
         openChapters()
-        app.staticTexts["第3章"].firstMatch.tap()
+        app.buttons["toc.chapter.2"].tap()
         let canvas = app.descendants(matching: .any)["reader.canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 15))
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "第3章正文"), object: canvas)], timeout: 15)

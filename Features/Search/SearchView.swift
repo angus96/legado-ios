@@ -267,8 +267,9 @@ struct SearchItemView: View {
                     
                     Spacer()
                     
-                    if result.sourceCount > 1 {
+                    if result.sourceCount > 0 {
                         Text("\(result.sourceCount) 个书源")
+                            .accessibilityIdentifier("search.sourceCount")
                             .font(.caption2)
                             .foregroundColor(.white)
                             .padding(.horizontal, 6)
@@ -317,7 +318,7 @@ struct SearchItemView: View {
                         .foregroundColor(.secondary)
                         .lineLimit(2)
                 }
-                Text(result.sourceName).font(.caption2).foregroundColor(.secondary).lineLimit(1)
+                Text(result.displaySourceName).font(.caption2).foregroundColor(.secondary).lineLimit(1)
             }
         }
         .padding(.vertical, 8)

@@ -528,6 +528,7 @@ class BookDetailViewModel: ObservableObject {
         let request = BookChapter.fetchRequest(byBookId: book.bookId)
         request.fetchLimit = 5
         do {
+            try await ChapterDirectoryUpdater.repairStoredDirectory(for: book)
             previewChapters = try bookContext.fetch(request).map {
                 ChapterPreview(id: $0.chapterId, index: Int($0.index), title: $0.title, isCached: $0.isCached)
             }

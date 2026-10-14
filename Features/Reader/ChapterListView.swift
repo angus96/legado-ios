@@ -108,6 +108,7 @@ struct ChapterListView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("toc.chapter.\(chapter.index)")
                     }
                 }
                 .listStyle(.plain)

@@ -396,7 +396,7 @@ class WebBook {
             }
         }
 
-        return chapters
+        return TocParser.normalizeDirectory(chapters)
     }
     
     // MARK: - 获取正文

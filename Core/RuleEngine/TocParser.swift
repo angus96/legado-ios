@@ -8,6 +8,37 @@ final class TocParser {
         self.ruleEngine = ruleEngine
     }
 
+    /// 最新章节通常也出现在完整目录里。优先保留覆盖全部章节的连续目录，
+    /// 不按标题数字重排，因此引言、序章、分卷和无编号章节仍保持书源顺序。
+    static func directoryPositions(_ chapters: [WebChapter]) -> [Int] {
+        let keys = chapters.enumerated().map { index, chapter -> String in
+            let url = chapter.url.trimmingCharacters(in: .whitespacesAndNewlines)
+            return chapter.isVolume || url.isEmpty ? "entry:\(index)" : "url:\(url)"
+        }
+        let uniqueCount = Set(keys).count
+        guard uniqueCount < keys.count else { return Array(chapters.indices) }
+        var lastPositions: [String: Int] = [:]
+        var start = 0
+        var directory = 0..<0
+        for (index, key) in keys.enumerated() {
+            if let previous = lastPositions[key] { start = max(start, previous + 1) }
+            if index + 1 - start >= directory.count { directory = start..<(index + 1) }
+            lastPositions[key] = index
+        }
+        if directory.count == uniqueCount { return Array(directory) }
+        // 分页目录可能在页边界重复，仍按首次出现的顺序拼接，不丢掉其他页的章节。
+        var seen = Set<String>()
+        return chapters.indices.filter { seen.insert(keys[$0]).inserted }
+    }
+
+    static func normalizeDirectory(_ chapters: [WebChapter]) -> [WebChapter] {
+        directoryPositions(chapters).enumerated().map { index, position in
+            var chapter = chapters[position]
+            chapter.index = index
+            return chapter
+        }
+    }
+
     func parseChapters(
         body: String,
         baseUrl: String,

@@ -52,6 +52,7 @@ final class ChapterCacheViewModel: ObservableObject {
                 throw CacheError.bookUnavailable
             }
             guard !book.isLocal else { throw CacheError.localBook }
+            try await ChapterDirectoryUpdater.repairStoredDirectory(for: book)
             var stored = try context.fetch(BookChapter.fetchRequest(byBookId: book.bookId))
             if stored.isEmpty {
                 guard let source = try BookSourceResolver.resolve(for: book) else { throw CacheError.noSource }

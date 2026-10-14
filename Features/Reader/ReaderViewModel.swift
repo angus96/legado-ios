@@ -338,6 +338,8 @@ class ReaderViewModel: ObservableObject, ReadViewCallBack {
     // MARK: - 加载目录
     private func loadChapters(book: Book) async throws {
         DebugLogger.shared.log("loadChapters: bookId=\(book.bookId), name=\(book.name), totalChapterNum=\(book.totalChapterNum)")
+
+        try await ChapterDirectoryUpdater.repairStoredDirectory(for: book)
         
         let request = BookChapter.fetchRequest(byBookId: book.bookId)
         

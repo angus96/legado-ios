@@ -3,6 +3,19 @@ import CoreData
 import UIKit
 @testable import Legado
 
+private actor SearchResponseGate {
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        if !released { await withCheckedContinuation { waiters.append($0) } }
+    }
+    func release() {
+        released = true
+        waiters.forEach { $0.resume() }
+        waiters = []
+    }
+}
+
 @MainActor
 final class ReadingAndSearchTests: XCTestCase {
     private func container() throws -> NSPersistentContainer {
@@ -31,6 +44,119 @@ final class ReadingAndSearchTests: XCTestCase {
         book.bookUrl = "https://example.invalid/book"
         book.tocUrl = "https://example.invalid/toc"
         return book
+    }
+
+    func testChapterDirectoryUsesCompleteListAndKeepsIntroductions() async throws {
+        let database = try container()
+        let source = BookSource.create(in: database.viewContext)
+        source.bookSourceUrl = "https://example.invalid"
+        source.setTocRule(TocRule(bookList: "id.list@tag.dd", chapterName: "tag.a@text", chapterUrl: "tag.a@href"))
+        let book = makeBook(in: database.viewContext)
+        book.tocUrl = book.bookUrl
+        func entry(_ title: String, _ url: String) -> String { "<dd><a href='\(url)'>\(title)</a></dd>" }
+        let latest = entry("第三章 归来", "/3") + entry("第二章 上路", "/2")
+        let directory = entry("引言", "/intro") + entry("序章", "/prologue") +
+            entry("第一章 初见", "/1") + entry("第二章 上路", "/2") + entry("第三章 归来", "/3")
+        for html in [latest + directory, directory + latest] {
+            book.tocHtml = "<dl id='list'>\(html)</dl>"
+            let chapters = try await WebBook.getChapterList(source: source, book: book)
+            XCTAssertEqual(chapters.map(\.title), ["引言", "序章", "第一章 初见", "第二章 上路", "第三章 归来"])
+            XCTAssertEqual(chapters.map(\.index), Array(0..<5))
+            XCTAssertEqual(Set(chapters.map(\.url)).count, 5)
+        }
+    }
+
+    func testChapterDirectoryKeepsPageOverlapsAndSameNamedChapters() throws {
+        let raw = try TocParser().parseChapters(body: """
+            {"chapters":[{"name":"引言","url":"/intro"},{"name":"第一章","url":"/1"},
+            {"name":"第二章","url":"/2"},{"name":"第二章","url":"/2"},
+            {"name":"序章","url":"/volume-2-prologue"},{"name":"第一章","url":"/volume-2-1"}]}
+            """, baseUrl: "https://example.invalid", rule: TocRule(bookList: "$.chapters", chapterName: "$.name", chapterUrl: "$.url"))
+        let chapters = TocParser.normalizeDirectory(raw)
+        XCTAssertEqual(chapters.map(\.title), ["引言", "第一章", "第二章", "序章", "第一章"])
+        XCTAssertEqual(chapters.map(\.index), Array(0..<5))
+        XCTAssertEqual(chapters.last?.url, "/volume-2-1")
+    }
+
+    func testSavedDirectoryRepairPreservesReadingCacheAndBookmarks() async throws {
+        let database = try container()
+        let context = database.viewContext
+        let book = makeBook(in: context)
+        let entries = [("第三章", "/3"), ("第二章", "/2"), ("引言", "/intro"),
+                       ("第一章", "/1"), ("第二章", "/2"), ("第三章", "/3")]
+        for (index, entry) in entries.enumerated() {
+            let chapter = BookChapter.create(in: context, bookId: book.bookId, url: entry.1, index: Int32(index), title: entry.0)
+            chapter.book = book
+            if index == 1 { chapter.isCached = true; chapter.cachePath = "existing-cache.txt"; chapter.contentHash = "existing-hash" }
+        }
+        book.totalChapterNum = 6; book.durChapterIndex = 1; book.durChapterPos = 7; book.durChapterTitle = "第二章"
+        let bookmark = Bookmark.create(in: context)
+        bookmark.bookId = book.bookId; bookmark.book = book; bookmark.chapterIndex = 0
+        bookmark.chapterTitle = "第三章"; bookmark.content = "书签正文"
+        try context.save()
+        try await ChapterDirectoryUpdater.repairStoredDirectory(for: book)
+        let chapters = try context.fetch(BookChapter.fetchRequest(byBookId: book.bookId))
+        XCTAssertEqual(chapters.map(\.title), ["引言", "第一章", "第二章", "第三章"])
+        XCTAssertEqual(chapters.map(\.index), [0, 1, 2, 3])
+        XCTAssertEqual(book.totalChapterNum, 4)
+        XCTAssertEqual(book.durChapterIndex, 2); XCTAssertEqual(book.durChapterPos, 7)
+        XCTAssertEqual(book.durChapterTitle, "第二章")
+        XCTAssertTrue(chapters[2].isCached)
+        XCTAssertEqual(chapters[2].cachePath, "existing-cache.txt")
+        XCTAssertEqual(chapters[2].contentHash, "existing-hash")
+        XCTAssertEqual(bookmark.chapterIndex, 3); XCTAssertEqual(bookmark.content, "书签正文")
+        let identifiers = chapters.map(\.chapterId)
+        try await ChapterDirectoryUpdater.repairStoredDirectory(for: book)
+        XCTAssertEqual(try context.fetch(BookChapter.fetchRequest(byBookId: book.bookId)).map(\.chapterId), identifiers)
+    }
+
+    func testSearchDropsRemovedSourcesAndKeepsAnUnnamedUsableSource() async throws {
+        let database = try container()
+        let context = database.viewContext
+        let sources = (0..<4).map { index -> BookSource in
+            let source = BookSource.create(in: context)
+            source.bookSourceUrl = index == 3 ? " " : "https://example.invalid/\(index)"
+            source.bookSourceName = index == 0 ? " " : "源\(index)"
+            source.searchUrl = "/search"
+            return source
+        }
+        try context.save()
+        let gate = SearchResponseGate()
+        let started = expectation(description: "已捕获三个有效书源")
+        started.expectedFulfillmentCount = 3
+        let model = SearchViewModel(context: context, sourceTimeout: 5, selectionDefaults: nil) { source, _ in
+            started.fulfill()
+            await gate.wait()
+            return [SearchBookResult(name: "有效搜索结果", author: "作者", bookUrl: source.bookSourceUrl + "/book")]
+        }
+        let task = Task { await model.search(keyword: "搜索", sources: sources) }
+        await fulfillment(of: [started], timeout: 3)
+        context.delete(sources[1]); sources[2].enabled = false
+        try context.save()
+        await gate.release()
+        await task.value
+        XCTAssertEqual(model.totalSourceCount, 3)
+        XCTAssertEqual(model.searchResults.count, 1)
+        XCTAssertEqual(model.searchResults.first?.sourceId, sources[0].sourceId)
+        XCTAssertEqual(model.searchResults.first?.sourceCount, 1)
+        XCTAssertEqual(model.searchResults.first?.displaySourceName, sources[0].bookSourceUrl)
+    }
+
+    func testSearchKeepsAlternateSourceWhenTheFirstSourceDisappears() throws {
+        let first = UUID(), second = UUID()
+        var accumulator = SearchResultAccumulator()
+        accumulator.append([
+            BookSearchResult(name: "同一本书", author: "作者", sourceName: "原源", sourceId: first, bookUrl: "https://first.invalid/book"),
+            BookSearchResult(name: "同一本书", author: "作者", sourceName: "备用源", sourceId: second, bookUrl: "https://second.invalid/book")
+        ])
+        let rowID = try XCTUnwrap(accumulator.results.first?.id)
+        accumulator.retainSources([second])
+        XCTAssertEqual(accumulator.results.first?.id, rowID)
+        XCTAssertEqual(accumulator.results.first?.sourceCount, 1)
+        XCTAssertEqual(accumulator.results.first?.sourceName, "备用源")
+        XCTAssertEqual(accumulator.results.first?.bookUrl, "https://second.invalid/book")
+        accumulator.retainSources([])
+        XCTAssertTrue(accumulator.results.isEmpty)
     }
 
     func testLayoutPreservesShortLongAndUnicodeParagraphsAndDrawsEveryLine() async throws {

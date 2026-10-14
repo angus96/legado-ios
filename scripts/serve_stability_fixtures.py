@@ -16,7 +16,17 @@ class StabilityHandler(Handler):
     def do_GET(self):
         parsed = urlsplit(self.path)
         key = parse_qs(parsed.query).get("key", [""])[0]
-        if parsed.path in ("/search-preview", "/book-preview"):
+        if parsed.path in ("/search-directory", "/book-directory", "/toc-latest"):
+            payload = {"name": "目录测试书", "author": "测试作者", "toc": "/toc-latest", "intro": "目录测试简介"}
+            if parsed.path == "/search-directory":
+                payload = {"books": [{"idx": 0, "titles": ["目录测试书"], "author": "测试作者", "url": "/book-directory"}]}
+            elif parsed.path == "/toc-latest":
+                chapters = [{"name": f"第{i}章", "url": f"/chapter/{i}"} for i in range(1, 5)]
+                payload = {"chapters": list(reversed(chapters[-2:])) + [{"name": "引言", "url": "/chapter/intro"}] + chapters}
+            body = json.dumps(payload, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+        elif parsed.path in ("/search-preview", "/book-preview"):
             title = "长夜行舟：一个旅人与群星的故事"
             payload = {"name": title, "author": "远山与海", "toc": "/toc", "kind": "奇幻,冒险",
                        "wordCount": "128万字", "intro": "群星隐去的夜晚，一个年轻旅人沿河启程。<br>他带着一封没有地址的信，穿过沉睡的城镇，寻找远方灯塔的守夜人。" * 3}

@@ -11,13 +11,16 @@ def export(bundle, destination):
         print("No test result bundle to export.")
         return
     destination.mkdir(parents=True, exist_ok=True)
+    version = subprocess.check_output(["xcodebuild", "-version"], text=True)
+    xcode_major = int(re.search(r"Xcode (\d+)", version).group(1))
+    legacy_flags = ["--legacy"] if xcode_major >= 16 else []
     pending, visited, exported, manifest = [None], set(), set(), []
     while pending:
         reference = pending.pop()
         if reference in visited:
             continue
         visited.add(reference)
-        command = ["xcrun", "xcresulttool", "get", "--path", str(bundle), "--format", "json"]
+        command = ["xcrun", "xcresulttool", "get"] + legacy_flags + ["--path", str(bundle), "--format", "json"]
         if reference:
             command += ["--id", reference]
         data = json.loads(subprocess.check_output(command))
@@ -39,7 +42,7 @@ def export(bundle, destination):
                     safe_name = re.sub(r"[^\w\-\u4e00-\u9fff]", "_", name)[:100]
                     extension = ".png" if kind == "public.png" else ".jpg"
                     path = destination / (f"{len(manifest) + 1:02d}-" + safe_name + extension)
-                    subprocess.run(["xcrun", "xcresulttool", "export", "--path", str(bundle),
+                    subprocess.run(["xcrun", "xcresulttool", "export"] + legacy_flags + ["--path", str(bundle),
                                     "--id", identifier, "--type", "file", "--output-path", str(path)], check=True)
                     manifest.append({"name": name, "file": path.name})
                 for child in node.values():

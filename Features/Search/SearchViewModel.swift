@@ -89,10 +89,13 @@ class SearchViewModel: ObservableObject {
 
         // 数据库内容在所属主队列一次性拷贝，并发请求只接收普通值。
         var seen = Set<UUID>()
-        let definitions = sources.filter {
+        let usableSources = sources.filter {
             !$0.isDeleted && $0.managedObjectContext != nil && $0.enabled &&
+            !$0.bookSourceUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             !($0.searchUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        }.sorted {
+        }
+        let sourceObjects = Dictionary(usableSources.map { ($0.sourceId, $0) }, uniquingKeysWith: { first, _ in first })
+        let definitions = usableSources.sorted {
             if $0.weight != $1.weight { return $0.weight > $1.weight }
             return $0.respondTime < $1.respondTime
         }.compactMap { try? BookSourceSnapshot.capture($0) }.filter { seen.insert($0.sourceId).inserted }
@@ -128,15 +131,22 @@ class SearchViewModel: ObservableObject {
                     failures += 1
                     if errors.count < 8 { errors.append(error) }
                 }
-                accumulator.append(results.map {
-                    SearchResult(name: $0.name, author: $0.author, coverUrl: $0.coverUrl,
-                                 intro: $0.intro, kind: $0.kind, wordCount: $0.wordCount,
-                                 lastChapter: $0.lastChapter, sourceName: source.bookSourceName,
-                                 sourceId: source.sourceId, bookUrl: $0.bookUrl)
-                })
+                if let currentSource = sourceObjects[source.sourceId],
+                   !currentSource.isDeleted, currentSource.managedObjectContext != nil, currentSource.enabled {
+                    let name = source.bookSourceName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    accumulator.append(results.map {
+                        SearchResult(name: $0.name, author: $0.author, coverUrl: $0.coverUrl,
+                                     intro: $0.intro, kind: $0.kind, wordCount: $0.wordCount,
+                                     lastChapter: $0.lastChapter, sourceName: name.isEmpty ? source.bookSourceUrl : name,
+                                     sourceId: source.sourceId, bookUrl: $0.bookUrl)
+                    })
+                }
                 let now = ProcessInfo.processInfo.systemUptime
                 if now - lastPublish >= 0.12 || completed == definitions.count ||
                     (self.searchResults.isEmpty && !accumulator.results.isEmpty) {
+                    accumulator.retainSources(Set(sourceObjects.compactMap { id, object in
+                        !object.isDeleted && object.managedObjectContext != nil && object.enabled ? id : nil
+                    }))
                     self.searchResults = accumulator.results
                     self.completedSourceCount = completed
                     self.failedSourceCount = failures
@@ -145,6 +155,9 @@ class SearchViewModel: ObservableObject {
                 }
             }
             guard let self, self.searchID == requestID, !Task.isCancelled else { return }
+            accumulator.retainSources(Set(sourceObjects.compactMap { id, object in
+                !object.isDeleted && object.managedObjectContext != nil && object.enabled ? id : nil
+            }))
             self.searchResults = accumulator.results
             self.completedSourceCount = completed
             self.failedSourceCount = failures

@@ -1,6 +1,78 @@
 import CoreData
 
 enum ChapterDirectoryUpdater {
+    /// 修复已经保存的重复目录。用章节链接对应阅读位置、缓存和书签，避免因序号变化跳章。
+    static func repairStoredDirectory(for book: Book) async throws {
+        let original = try BookRequestSnapshot.capture(book)
+        let (bookID, coordinator, isLocal) = try ManagedObjectAccess.read(book) {
+            ($0.objectID, $0.managedObjectContext?.persistentStoreCoordinator, $0.isLocal)
+        }
+        guard !isLocal, !bookID.isTemporaryID, let coordinator else { return }
+        let context = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
+        context.persistentStoreCoordinator = coordinator
+        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        let repaired = try await context.perform { () -> Bool in
+            do {
+                try Task.checkCancellation()
+                guard let target = try context.existingObject(with: bookID) as? Book,
+                      !target.isDeleted, target.origin == original.origin, target.bookUrl == original.bookUrl else {
+                    throw CancellationError()
+                }
+                let stored = try context.fetch(BookChapter.fetchRequest(byBookId: target.bookId))
+                let input = stored.map { chapter -> WebChapter in
+                    var item = WebChapter()
+                    item.title = chapter.title; item.url = chapter.chapterUrl; item.index = Int(chapter.index)
+                    return item
+                }
+                let positions = TocParser.directoryPositions(input)
+                guard !positions.isEmpty,
+                      positions.count != stored.count || stored.enumerated().contains(where: { Int($0.element.index) != $0.offset }) else {
+                    return false
+                }
+                let ordered = positions.map { stored[$0] }
+                let newIndices = Dictionary(ordered.enumerated().filter { !$0.element.chapterUrl.isEmpty }
+                    .map { ($0.element.chapterUrl, $0.offset) }, uniquingKeysWith: { first, _ in first })
+                let oldURLs = Dictionary(stored.map { ($0.index, $0.chapterUrl) }, uniquingKeysWith: { first, _ in first })
+                var cached: [String: BookChapter] = [:]
+                for chapter in stored where chapter.isCached && chapter.cachePath?.isEmpty == false {
+                    cached[chapter.chapterUrl] = chapter
+                }
+                let currentIndex = oldURLs[target.durChapterIndex].flatMap { newIndices[$0] }
+                    ?? ReadingProgressMapper.chapterIndex(previousIndex: Int(target.durChapterIndex),
+                        previousCount: stored.count, title: target.durChapterTitle, newTitles: ordered.map(\.title))
+                for (index, chapter) in ordered.enumerated() {
+                    if (!chapter.isCached || chapter.cachePath?.isEmpty != false), let previous = cached[chapter.chapterUrl] {
+                        chapter.isCached = previous.isCached
+                        chapter.cachePath = previous.cachePath
+                        chapter.contentHash = previous.contentHash
+                    }
+                    chapter.index = Int32(clamping: index)
+                }
+                let bookmarks = Bookmark.fetchRequest()
+                bookmarks.predicate = NSPredicate(format: "bookId == %@", target.bookId as CVarArg)
+                for bookmark in try context.fetch(bookmarks) {
+                    if let url = oldURLs[bookmark.chapterIndex], let index = newIndices[url] {
+                        bookmark.chapterIndex = Int32(clamping: index)
+                    }
+                }
+                let retained = Set(ordered.map(\.objectID))
+                for chapter in stored where !retained.contains(chapter.objectID) { context.delete(chapter) }
+                target.totalChapterNum = Int32(clamping: ordered.count)
+                target.durChapterIndex = Int32(clamping: currentIndex)
+                target.durChapterTitle = ordered[currentIndex].title
+                try Task.checkCancellation()
+                try context.save()
+                return true
+            } catch {
+                context.rollback()
+                throw error
+            }
+        }
+        if repaired {
+            try await ManagedObjectAccess.update(book) { $0.managedObjectContext?.refresh($0, mergeChanges: true) }
+        }
+    }
+
     static func replace(
         book: Book, source: BookSource, original: BookRequestSnapshot,
         metadata: BookRequestSnapshot, definition: BookSourceSnapshot, chapters: [WebChapter]
