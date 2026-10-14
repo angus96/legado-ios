@@ -156,40 +156,7 @@ class SearchViewModel: ObservableObject {
         await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
     }
 
-    func addToBookshelf(result: SearchResult) async throws -> Book {
-        let context = CoreDataStack.shared.viewContext
-        
-        let bookData = BookImportData(
-            name: result.name,
-            author: result.author,
-            bookUrl: result.bookUrl,
-            tocUrl: "",
-            origin: result.sourceId.uuidString,
-            originName: result.sourceName,
-            coverUrl: result.coverUrl,
-            intro: result.intro,
-            latestChapterTitle: result.lastChapter
-        )
-        
-        let book = try BookDeduplicator.importBook(bookData, context: context)
-        
-        let sourceRequest: NSFetchRequest<BookSource> = BookSource.fetchRequest()
-        sourceRequest.fetchLimit = 1
-        sourceRequest.predicate = NSPredicate(format: "sourceId == %@", result.sourceId as CVarArg)
-        if let source = try? context.fetch(sourceRequest).first {
-            book.source = source
-        }
-        
-        try CoreDataStack.shared.save()
-        return book
-    }
 
-    private func findBook(bookUrl: String, origin: String, in context: NSManagedObjectContext) -> Book? {
-        let request: NSFetchRequest<Book> = Book.fetchRequest()
-        request.fetchLimit = 1
-        request.predicate = NSPredicate(format: "bookUrl == %@ AND origin == %@", bookUrl, origin)
-        return try? context.fetch(request).first
-    }
 }
 
 enum SearchError: LocalizedError {

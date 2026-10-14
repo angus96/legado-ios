@@ -7,8 +7,7 @@ struct SearchView: View {
     @State private var showingSourcePicker = false
     @State private var showHistory = true
     @State private var navigatingToBookDetail = false
-    @State private var selectedBook: Book?
-    @State private var openingResultId: UUID?
+    @State private var selectedResult: BookSearchResult?
     @State private var historyKeywords: [SearchKeyword] = []
     @FocusState private var isSearchFocused: Bool
     
@@ -35,8 +34,9 @@ struct SearchView: View {
                 SourcePickerView(selectedSources: $viewModel.selectedSources)
             }
             .navigationDestination(isPresented: $navigatingToBookDetail) {
-                if let book = selectedBook {
-                    BookDetailView(book: book)
+                if let result = selectedResult {
+                    BookDetailView(result: result)
+                        .id(result.id)
                 }
             }
             .alert("错误", isPresented: Binding(
@@ -188,7 +188,6 @@ struct SearchView: View {
             ForEach(viewModel.searchResults) { result in
                 Button(action: { selectResult(result) }) { SearchItemView(result: result) }
                     .buttonStyle(.plain)
-                    .disabled(openingResultId != nil)
             }
         }
         .listStyle(.plain)
@@ -207,18 +206,10 @@ struct SearchView: View {
     }
     
     private func selectResult(_ result: SearchViewModel.SearchResult) {
-        guard openingResultId == nil else { return }
-        openingResultId = result.id
-        Task {
-            defer { openingResultId = nil }
-            do {
-                viewModel.cancelSearch()
-                selectedBook = try await viewModel.addToBookshelf(result: result)
-                navigatingToBookDetail = true
-            } catch {
-                viewModel.errorMessage = "加入书架失败：\(error.localizedDescription)"
-            }
-        }
+        isSearchFocused = false
+        viewModel.cancelSearch()
+        selectedResult = result
+        navigatingToBookDetail = true
     }
     
     private func loadHistory() {

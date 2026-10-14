@@ -16,7 +16,16 @@ class StabilityHandler(Handler):
     def do_GET(self):
         parsed = urlsplit(self.path)
         key = parse_qs(parsed.query).get("key", [""])[0]
-        if parsed.path.startswith("/chapter/"):
+        if parsed.path in ("/search-preview", "/book-preview"):
+            title = "长夜行舟：一个旅人与群星的故事"
+            payload = {"name": title, "author": "远山与海", "toc": "/toc", "kind": "奇幻,冒险",
+                       "wordCount": "128万字", "intro": "群星隐去的夜晚，一个年轻旅人沿河启程。<br>他带着一封没有地址的信，穿过沉睡的城镇，寻找远方灯塔的守夜人。" * 3}
+            if parsed.path == "/search-preview":
+                payload = {"books": [{"idx": 0, "titles": [title], "author": "远山与海", "url": "/book-preview"}]}
+            body = json.dumps(payload, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+        elif parsed.path.startswith("/chapter/"):
             number = parsed.path.rsplit("/", 1)[-1]
             paragraphs = [f"第{number}章正文，第{i}段。" + "这段文字用于检查阅读器是否真正显示正文，翻页后仍然能看清。" * 4 for i in range(50)]
             body = json.dumps({"content": "\n".join(paragraphs)}, ensure_ascii=False).encode()

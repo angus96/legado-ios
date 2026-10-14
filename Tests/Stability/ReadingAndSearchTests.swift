@@ -523,6 +523,83 @@ final class ReadingAndSearchTests: XCTestCase {
         XCTAssertFalse(model.isSearching)
     }
 
+    func testDetailPreviewDoesNotSaveUntilExplicitlyAddedAndDoesNotDuplicate() throws {
+        let database = try container()
+        let context = database.viewContext
+        let source = BookSource.create(in: context)
+        source.bookSourceUrl = "https://example.invalid"
+        source.bookSourceName = "详情书源"
+        try context.save()
+        let result = BookSearchResult(name: "待加入的书", author: "作者", kind: "奇幻", wordCount: "120万字",
+                                      sourceName: source.bookSourceName, sourceId: source.sourceId,
+                                      bookUrl: source.bookSourceUrl + "/preview")
+        let first = BookDetailViewModel(result: result, context: context)
+        let second = BookDetailViewModel(result: result, context: context)
+        XCTAssertFalse(first.isInBookshelf)
+        first.book.intro = "预览页加载的简介"
+        first.book.tocUrl = source.bookSourceUrl + "/toc"
+        try context.save()
+        XCTAssertEqual(try context.count(for: Book.fetchRequest()), 0, "主上下文保存不能把浏览中的书放入书架")
+        XCTAssertTrue(first.addToBookshelf())
+        XCTAssertTrue(first.isInBookshelf)
+        XCTAssertEqual(first.book.intro, "预览页加载的简介")
+        XCTAssertEqual(first.book.kind, "奇幻")
+        XCTAssertEqual(first.book.wordCount, "120万字")
+        XCTAssertEqual(first.book.source?.objectID, source.objectID)
+        first.book.durChapterIndex = 12; first.book.durChapterPos = 5
+        try context.save()
+        XCTAssertTrue(second.addToBookshelf())
+        XCTAssertTrue(first.addToBookshelf())
+        XCTAssertTrue(second.book === first.book)
+        XCTAssertEqual(try context.count(for: Book.fetchRequest()), 1)
+        XCTAssertEqual(second.book.durChapterIndex, 12)
+        XCTAssertEqual(second.book.durChapterPos, 5)
+    }
+
+    func testOpeningExistingSearchResultPreservesProgressAndBookSettings() throws {
+        let database = try container()
+        let book = makeBook(in: database.viewContext)
+        book.durChapterIndex = 8; book.durChapterPos = 3
+        book.totalChapterNum = 60; book.group = 7; book.order = -1
+        book.tocUrl = "https://example.invalid/saved-toc"
+        book.customIntro = "自定义简介"
+        try database.viewContext.save()
+        let result = BookSearchResult(name: book.name, author: book.author,
+                                      sourceName: "搜索书源", sourceId: UUID(), bookUrl: book.bookUrl)
+        let model = BookDetailViewModel(result: result, context: database.viewContext)
+        XCTAssertTrue(model.isInBookshelf)
+        XCTAssertTrue(model.book === book)
+        XCTAssertFalse(database.viewContext.hasChanges, "仅浏览已有书籍不应写入默认字段")
+        XCTAssertTrue(model.startReading())
+        XCTAssertEqual(book.durChapterIndex, 8)
+        XCTAssertEqual(book.durChapterPos, 3)
+        XCTAssertEqual(book.totalChapterNum, 60)
+        XCTAssertEqual(book.group, 7)
+        XCTAssertEqual(book.order, -1)
+        XCTAssertEqual(book.tocUrl, "https://example.invalid/saved-toc")
+        XCTAssertEqual(book.customIntro, "自定义简介")
+    }
+
+    func testAddingBookReportsSaveFailureAndCanRetry() throws {
+        let database = try container()
+        let context = FailingBookSaveContext(concurrencyType: .mainQueueConcurrencyType)
+        context.persistentStoreCoordinator = database.persistentStoreCoordinator
+        let result = BookSearchResult(name: "待保存", author: "作者", sourceName: "书源",
+                                      sourceId: UUID(), bookUrl: "https://example.invalid/new")
+        let model = BookDetailViewModel(result: result, context: context)
+        context.failSave = true
+        XCTAssertFalse(model.startReading())
+        XCTAssertFalse(model.isInBookshelf)
+        XCTAssertNotNil(model.errorMessage)
+        XCTAssertEqual(try context.count(for: Book.fetchRequest()), 0)
+        context.failSave = false
+        XCTAssertTrue(model.startReading(chapterIndex: 2, chapterTitle: "第三章"))
+        XCTAssertTrue(model.isInBookshelf)
+        XCTAssertEqual(model.book.durChapterIndex, 2)
+        XCTAssertEqual(model.book.durChapterTitle, "第三章")
+        XCTAssertEqual(try context.count(for: Book.fetchRequest()), 1)
+    }
+
     func testSearchRemembersSelectedSourcesAndAnEmptySelection() throws {
         let database = try container()
         let suite = "SearchSelectionTests." + UUID().uuidString
@@ -598,6 +675,14 @@ final class ReadingAndSearchTests: XCTestCase {
         for _ in 0..<100 where reader.curTextChapter == nil { try await Task.sleep(nanoseconds: 20_000_000) }
         let resized = try XCTUnwrap(reader.curTextChapter)
         XCTAssertEqual(reader.durChapterPos, resized.getPageIndexByCharIndex(position))
+    }
+}
+
+private final class FailingBookSaveContext: NSManagedObjectContext {
+    var failSave = false
+    override func save() throws {
+        if failSave { throw NSError(domain: "BookSaveFixture", code: 1) }
+        try super.save()
     }
 }
 

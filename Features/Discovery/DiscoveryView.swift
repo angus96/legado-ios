@@ -536,41 +536,14 @@ final class ExploreResultsViewModel: ObservableObject {
         }
     }
 
-    func addToBookshelf(result: SearchViewModel.SearchResult) async throws -> Book {
-        let context = CoreDataStack.shared.viewContext
 
-        let bookData = BookImportData(
-            name: result.name,
-            author: result.author,
-            bookUrl: result.bookUrl,
-            tocUrl: "",
-            origin: result.sourceId.uuidString,
-            originName: result.sourceName,
-            coverUrl: result.coverUrl,
-            intro: result.intro,
-            latestChapterTitle: result.lastChapter
-        )
-
-        let book = try BookDeduplicator.importBook(bookData, context: context)
-
-        let sourceRequest: NSFetchRequest<BookSource> = BookSource.fetchRequest()
-        sourceRequest.fetchLimit = 1
-        sourceRequest.predicate = NSPredicate(format: "sourceId == %@", result.sourceId as CVarArg)
-        if let source = try? context.fetch(sourceRequest).first {
-            book.source = source
-        }
-
-        try CoreDataStack.shared.save()
-        return book
-    }
 }
 
 struct ExploreResultsView: View {
     let selection: ExploreSelection
     @StateObject private var viewModel: ExploreResultsViewModel
-    @State private var selectedBook: Book?
+    @State private var selectedResult: BookSearchResult?
     @State private var navigatingToBookDetail = false
-    @State private var openingResultId: UUID?
 
     init(selection: ExploreSelection) {
         self.selection = selection
@@ -584,7 +557,6 @@ struct ExploreResultsView: View {
                     SearchItemView(result: result)
                 }
                 .buttonStyle(.plain)
-                .disabled(openingResultId == result.id)
             }
 
             if viewModel.hasMore, !viewModel.results.isEmpty {
@@ -632,24 +604,16 @@ struct ExploreResultsView: View {
             Text(viewModel.errorMessage ?? "")
         }
         .navigationDestination(isPresented: $navigatingToBookDetail) {
-            if let book = selectedBook {
-                BookDetailView(book: book)
+            if let result = selectedResult {
+                BookDetailView(result: result)
+                    .id(result.id)
             }
         }
     }
 
     private func selectResult(_ result: SearchViewModel.SearchResult) {
-        guard openingResultId == nil else { return }
-        openingResultId = result.id
-        Task {
-            defer { openingResultId = nil }
-            do {
-                selectedBook = try await viewModel.addToBookshelf(result: result)
-                navigatingToBookDetail = true
-            } catch {
-                viewModel.errorMessage = "加入书架失败：\(error.localizedDescription)"
-            }
-        }
+        selectedResult = result
+        navigatingToBookDetail = true
     }
 }
 

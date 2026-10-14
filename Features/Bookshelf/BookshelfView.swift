@@ -65,7 +65,9 @@ struct BookshelfView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingSearch) {
+        .fullScreenCover(isPresented: $showingSearch, onDismiss: {
+            Task { await viewModel.loadBooks() }
+        }) {
             SearchView()
         }
         .sheet(isPresented: $viewModel.showingAddUrl) {

@@ -2,6 +2,66 @@ import XCTest
 
 final class LegadoUITests: XCTestCase {
     @MainActor
+    func testSearchDetailOnlyAddsWhenRequestedAndKeepsItsChapters() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["LEGADO_UI_TESTS"] = "1"
+        app.launchEnvironment["LEGADO_SEARCH_PREVIEW"] = "1"
+        app.launchEnvironment["LEGADO_FIXTURE_URL"] = "http://127.0.0.1:8766"
+        app.launchArguments = ["-com.apple.CoreData.ConcurrencyDebug", "1"]
+        app.launch()
+        let title = "长夜行舟：一个旅人与群星的故事"
+        func openDetail() {
+            app.buttons["bookshelf.search"].tap()
+            let keyword = app.textFields["search.keyword"]
+            XCTAssertTrue(keyword.waitForExistence(timeout: 5))
+            keyword.tap(); keyword.typeText("preview\n")
+            XCTAssertTrue(app.staticTexts[title].firstMatch.waitForExistence(timeout: 15))
+            app.staticTexts[title].firstMatch.tap()
+            XCTAssertTrue(app.buttons["bookDetail.add"].waitForExistence(timeout: 10))
+        }
+        func closeDetailAndSearch() {
+            app.navigationBars.buttons["搜索"].tap()
+            app.buttons["关闭"].firstMatch.tap()
+            XCTAssertTrue(app.buttons["bookshelf.search"].waitForExistence(timeout: 5))
+        }
+        func openChapters() {
+            let button = app.buttons["bookDetail.chapters"]
+            wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: button)], timeout: 15)
+            button.tap()
+            XCTAssertTrue(app.staticTexts["第3章"].firstMatch.waitForExistence(timeout: 15))
+        }
+        XCTAssertTrue(app.buttons["bookshelf.search"].waitForExistence(timeout: 15))
+        openDetail()
+        XCTAssertTrue(app.buttons["bookDetail.add"].label.contains("加入书架"))
+        openChapters()
+        app.buttons["关闭"].firstMatch.tap()
+        capture(app, name: "书籍详情-未加入-长书名与简介")
+        closeDetailAndSearch()
+        XCTAssertFalse(app.staticTexts[title].exists, "仅浏览详情和目录不能增加书架条目")
+
+        openDetail()
+        openChapters()
+        app.buttons["关闭"].firstMatch.tap()
+        app.buttons["bookDetail.add"].tap()
+        let joined = NSPredicate(format: "label CONTAINS %@", "已在书架")
+        wait(for: [XCTNSPredicateExpectation(predicate: joined, object: app.buttons["bookDetail.add"])], timeout: 5)
+        XCTAssertFalse(app.buttons["bookDetail.add"].isEnabled)
+        capture(app, name: "书籍详情-已加入书架")
+        closeDetailAndSearch()
+        XCTAssertTrue(app.staticTexts[title].firstMatch.waitForExistence(timeout: 10), "关闭搜索后书架应立即刷新")
+
+        openDetail()
+        XCTAssertTrue(app.buttons["bookDetail.add"].label.contains("已在书架"))
+        openChapters()
+        app.staticTexts["第3章"].firstMatch.tap()
+        let canvas = app.descendants(matching: .any)["reader.canvas"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "第3章正文"), object: canvas)], timeout: 15)
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    @MainActor
     func testDiscoveryKeyboardCanBeDismissedWithoutClearingTheFilter() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

@@ -10,7 +10,8 @@ enum StabilityTestBootstrap {
         UserDefaults.standard.set(0, forKey: "app.defaultHomePage")
         let rules: [String: Any] = [
             "ruleSearch": ["bookList": "$.books", "name": "$.titles[{$.idx}]", "author": "$.author", "bookUrl": "$.url"],
-            "ruleBookInfo": ["name": "$.name", "author": "$.author", "tocUrl": "$.toc"],
+            "ruleBookInfo": ["name": "$.name", "author": "$.author", "tocUrl": "$.toc",
+                             "intro": "$.intro", "kind": "$.kind", "wordCount": "$.wordCount"],
             "ruleToc": ["chapterList": "$.chapters", "chapterName": "$.name", "chapterUrl": "$.url"],
             "ruleContent": ["content": "$.content"]
         ]
@@ -19,6 +20,9 @@ enum StabilityTestBootstrap {
             source["bookSourceUrl"] = base + "/" + kind
             source["bookSourceName"] = kind == "current" ? "测试原书源" : (kind == "alternate" ? "测试新书源" : "测试缺字段书源")
             source["searchUrl"] = base + (kind == "missing" ? "/search-missing" : "/search")
+            if ProcessInfo.processInfo.environment["LEGADO_SEARCH_PREVIEW"] == "1" {
+                source["searchUrl"] = base + "/search-preview"
+            }
             if kind != "missing" {
                 source["enabledExplore"] = true
                 source["exploreUrl"] = "测试分类::" + base + "/explore"

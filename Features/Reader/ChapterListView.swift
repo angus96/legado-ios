@@ -131,7 +131,7 @@ struct ChapterListView: View {
         request.sortDescriptors = [NSSortDescriptor(keyPath: \BookChapter.index, ascending: true)]
         
         do {
-            chapters = try context.fetch(request)
+            chapters = try (book.managedObjectContext ?? context).fetch(request)
         } catch {
             DebugLogger.shared.log("加载章节列表失败: \(error.localizedDescription)")
         }
