@@ -110,6 +110,92 @@ final class ReadingAndSearchTests: XCTestCase {
         XCTAssertEqual(try context.fetch(BookChapter.fetchRequest(byBookId: book.bookId)).map(\.chapterId), identifiers)
     }
 
+    func testAuthorSearchFiltersByAuthorAndPreservesMergedSources() async throws {
+        let database = try container()
+        let context = database.viewContext
+        let sources = (0..<2).map { index -> BookSource in
+            let source = BookSource.create(in: context)
+            source.bookSourceUrl = "https://example.invalid/\(index)"
+            source.bookSourceName = "作者搜索测试源\(index)"
+            source.searchUrl = "/search"
+            return source
+        }
+        try context.save()
+        let defaultsName = "author-search-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let requested = expectation(description: "每个书源只搜索一次")
+        requested.expectedFulfillmentCount = sources.count
+        requested.assertForOverFulfill = true
+        let model = SearchViewModel(context: context, selectionDefaults: defaults) { source, keyword in
+            XCTAssertEqual(keyword, "辰东")
+            requested.fulfill()
+            return [
+                SearchBookResult(name: "遮天", author: " 辰东 ", bookUrl: source.bookSourceUrl + "/1"),
+                SearchBookResult(name: "完美世界", author: "辰东", bookUrl: source.bookSourceUrl + "/2"),
+                SearchBookResult(name: "辰东作品评论", author: "另一位作者", bookUrl: source.bookSourceUrl + "/3"),
+                SearchBookResult(name: "辰东相关资料", author: "", bookUrl: source.bookSourceUrl + "/4")
+            ]
+        }
+        XCTAssertEqual(model.searchMode, .all)
+        model.searchMode = .author
+        await model.search(keyword: "  辰东\n", sources: sources)
+        await fulfillment(of: [requested], timeout: 3)
+        XCTAssertEqual(model.searchResults.map(\.name), ["遮天", "完美世界"])
+        XCTAssertEqual(model.searchResults.map(\.sourceCount), [2, 2])
+        XCTAssertEqual(model.completedSourceCount, 2)
+        let identifiers = model.searchResults.map(\.id)
+
+        model.searchText = "尚未提交的新关键词"
+        model.searchMode = .all
+        XCTAssertEqual(model.searchResults.count, 4)
+        model.searchMode = .author
+        XCTAssertEqual(model.searchResults.map(\.id), identifiers, "切换方式使用已提交的关键词，并保留列表行和书源数量")
+        XCTAssertEqual(model.searchResults.map(\.sourceCount), [2, 2])
+        let reopened = SearchViewModel(context: context, selectionDefaults: defaults)
+        XCTAssertEqual(reopened.searchMode, .author)
+
+        model.clearSearch()
+        model.searchMode = .all
+        XCTAssertTrue(model.searchResults.isEmpty, "清空后切换方式不能重新显示旧结果")
+        XCTAssertFalse(model.hasSearched)
+    }
+
+    func testAuthorSearchFiltersLateResultsAndCanRestoreGeneralResults() async throws {
+        let database = try container()
+        let context = database.viewContext
+        let source = BookSource.create(in: context)
+        source.bookSourceUrl = "https://example.invalid"
+        source.bookSourceName = "作者搜索测试源"
+        source.searchUrl = "/search"
+        try context.save()
+        let gate = SearchResponseGate()
+        let started = expectation(description: "书源已开始搜索")
+        let model = SearchViewModel(context: context, sourceTimeout: 5, selectionDefaults: nil) { _, _ in
+            started.fulfill()
+            await gate.wait()
+            return [
+                SearchBookResult(name: "Pride and Prejudice", author: " Jane Austen ", bookUrl: "https://example.invalid/1"),
+                SearchBookResult(name: "Jane's Reading Guide", author: "Other Writer", bookUrl: "https://example.invalid/2"),
+                SearchBookResult(name: "Jane's Notes", author: "", bookUrl: "https://example.invalid/3")
+            ]
+        }
+        let task = Task { await model.search(keyword: "jane", sources: [source]) }
+        await fulfillment(of: [started], timeout: 3)
+        model.searchMode = .author
+        await gate.release()
+        await task.value
+        XCTAssertEqual(model.searchResults.map(\.name), ["Pride and Prejudice"])
+        XCTAssertEqual(model.completedSourceCount, 1)
+        XCTAssertEqual(model.failedSourceCount, 0)
+        XCTAssertFalse(model.isSearching)
+        model.searchMode = .all
+        XCTAssertEqual(model.searchResults.count, 3)
+        await model.search(keyword: "unmatched", sources: [])
+        model.searchMode = .author
+        XCTAssertTrue(model.searchResults.isEmpty, "新搜索不能带回上次的结果")
+    }
+
     func testSearchDropsRemovedSourcesAndKeepsAnUnnamedUsableSource() async throws {
         let database = try container()
         let context = database.viewContext

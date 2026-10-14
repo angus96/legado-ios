@@ -2,6 +2,46 @@ import XCTest
 
 final class LegadoUITests: XCTestCase {
     @MainActor
+    func testAuthorSearchFiltersResultsAndRemembersTheSelectedMode() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["LEGADO_UI_TESTS"] = "1"
+        app.launchEnvironment["LEGADO_AUTHOR_SEARCH"] = "1"
+        app.launchEnvironment["LEGADO_FIXTURE_URL"] = "http://127.0.0.1:8766"
+        app.launchArguments = ["-com.apple.CoreData.ConcurrencyDebug", "1"]
+        app.launch()
+        XCTAssertTrue(app.buttons["bookshelf.search"].waitForExistence(timeout: 15))
+        app.buttons["bookshelf.search"].tap()
+        let mode = app.segmentedControls["search.mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        mode.buttons["按作者"].tap()
+        let keyword = app.textFields["search.keyword"]
+        keyword.tap(); keyword.typeText("辰东\n")
+        XCTAssertTrue(app.staticTexts["遮天"].firstMatch.waitForExistence(timeout: 15))
+        let completed = NSPredicate(format: "label CONTAINS %@", "搜索完成")
+        wait(for: [XCTNSPredicateExpectation(predicate: completed, object: app.staticTexts["search.progress"])], timeout: 15)
+        XCTAssertTrue(app.staticTexts["完美世界"].exists)
+        XCTAssertFalse(app.staticTexts["辰东作品评论"].exists)
+        XCTAssertFalse(app.staticTexts["辰东相关资料"].exists)
+        XCTAssertEqual(app.staticTexts["search.sourceCount"].firstMatch.label, "3 个书源")
+        capture(app, name: "按作者搜索-只显示作者匹配的书")
+
+        mode.buttons["综合"].tap()
+        XCTAssertTrue(app.staticTexts["辰东作品评论"].firstMatch.waitForExistence(timeout: 5))
+        mode.buttons["按作者"].tap()
+        let hidden = NSPredicate(format: "exists == false")
+        wait(for: [XCTNSPredicateExpectation(predicate: hidden, object: app.staticTexts["辰东作品评论"])], timeout: 5)
+        app.buttons["关闭"].firstMatch.tap()
+        app.buttons["bookshelf.search"].tap()
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertTrue(mode.buttons["按作者"].isSelected)
+        keyword.tap(); keyword.typeText("不存在的作者\n")
+        XCTAssertTrue(app.staticTexts["没有找到作者匹配的书"].waitForExistence(timeout: 15))
+        capture(app, name: "按作者搜索-没有匹配作品")
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    @MainActor
     func testSingleSourceIsVisibleAndDirectoryStartsWithItsIntroduction() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

@@ -7,7 +7,18 @@ class SearchViewModel: ObservableObject {
     typealias SearchResult = BookSearchResult
     typealias SearchOperation = (BookSourceSnapshot, String) async throws -> [SearchBookResult]
 
+    enum SearchMode: String {
+        case all
+        case author
+    }
+
     @Published var searchText = ""
+    @Published var searchMode: SearchMode = .all {
+        didSet {
+            selectionDefaults?.set(searchMode.rawValue, forKey: Self.modeKey)
+            applySearchMode()
+        }
+    }
     @Published var searchResults: [SearchResult] = []
     @Published var isSearching = false
     @Published var errorMessage: String?
@@ -28,8 +39,11 @@ class SearchViewModel: ObservableObject {
     private let sourceTimeout: TimeInterval
     private let selectionDefaults: UserDefaults?
     private static let selectionKey = "search.selectedSourceIDs"
+    private static let modeKey = "search.mode"
     private var searchTask: Task<Void, Never>?
     private var searchID = UUID()
+    private var unfilteredResults: [SearchResult] = []
+    private var resultKeyword = ""
 
     init(context: NSManagedObjectContext = CoreDataStack.shared.viewContext,
          sourceTimeout: TimeInterval = 12,
@@ -40,6 +54,7 @@ class SearchViewModel: ObservableObject {
         self.operation = operation
         self.sourceTimeout = sourceTimeout
         self.selectionDefaults = selectionDefaults
+        searchMode = SearchMode(rawValue: selectionDefaults?.string(forKey: Self.modeKey) ?? "") ?? .all
         let request = BookSource.fetchRequest()
         request.predicate = NSPredicate(format: "enabled == YES AND searchUrl != nil AND searchUrl != ''")
         request.sortDescriptors = [NSSortDescriptor(key: "weight", ascending: false),
@@ -64,7 +79,8 @@ class SearchViewModel: ObservableObject {
     func clearSearch() {
         cancelSearch()
         searchText = ""
-        searchResults = []
+        resultKeyword = ""
+        publishResults([])
         hasSearched = false
         errorMessage = nil
         completedSourceCount = 0
@@ -79,7 +95,8 @@ class SearchViewModel: ObservableObject {
         cancelSearch()
         let requestID = UUID()
         searchID = requestID
-        searchResults = []
+        resultKeyword = keyword
+        publishResults([])
         errorMessage = nil
         sourceErrors = []
         completedSourceCount = 0
@@ -143,11 +160,11 @@ class SearchViewModel: ObservableObject {
                 }
                 let now = ProcessInfo.processInfo.systemUptime
                 if now - lastPublish >= 0.12 || completed == definitions.count ||
-                    (self.searchResults.isEmpty && !accumulator.results.isEmpty) {
+                    (self.unfilteredResults.isEmpty && !accumulator.results.isEmpty) {
                     accumulator.retainSources(Set(sourceObjects.compactMap { id, object in
                         !object.isDeleted && object.managedObjectContext != nil && object.enabled ? id : nil
                     }))
-                    self.searchResults = accumulator.results
+                    self.publishResults(accumulator.results)
                     self.completedSourceCount = completed
                     self.failedSourceCount = failures
                     self.sourceErrors = errors
@@ -158,7 +175,7 @@ class SearchViewModel: ObservableObject {
             accumulator.retainSources(Set(sourceObjects.compactMap { id, object in
                 !object.isDeleted && object.managedObjectContext != nil && object.enabled ? id : nil
             }))
-            self.searchResults = accumulator.results
+            self.publishResults(accumulator.results)
             self.completedSourceCount = completed
             self.failedSourceCount = failures
             self.sourceErrors = errors
@@ -169,7 +186,21 @@ class SearchViewModel: ObservableObject {
         await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
     }
 
+    private func publishResults(_ results: [SearchResult]) {
+        unfilteredResults = results
+        applySearchMode()
+    }
 
+    private func applySearchMode() {
+        switch searchMode {
+        case .all:
+            searchResults = unfilteredResults
+        case .author:
+            searchResults = unfilteredResults.filter {
+                !$0.displayAuthor.isEmpty && $0.displayAuthor.localizedCaseInsensitiveContains(resultKeyword)
+            }
+        }
+    }
 }
 
 enum SearchError: LocalizedError {

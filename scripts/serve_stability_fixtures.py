@@ -16,7 +16,17 @@ class StabilityHandler(Handler):
     def do_GET(self):
         parsed = urlsplit(self.path)
         key = parse_qs(parsed.query).get("key", [""])[0]
-        if parsed.path in ("/search-directory", "/book-directory", "/toc-latest"):
+        if parsed.path == "/search-author":
+            books = [
+                {"idx": 0, "titles": ["遮天"], "author": "辰东", "url": "/author/book-1"},
+                {"idx": 0, "titles": ["完美世界"], "author": "辰东", "url": "/author/book-2"},
+                {"idx": 0, "titles": ["辰东作品评论"], "author": "另一位作者", "url": "/author/review"},
+                {"idx": 0, "titles": ["辰东相关资料"], "author": "", "url": "/author/unknown"},
+            ] if key == "辰东" else []
+            body = json.dumps({"books": books}, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+        elif parsed.path in ("/search-directory", "/book-directory", "/toc-latest"):
             payload = {"name": "目录测试书", "author": "测试作者", "toc": "/toc-latest", "intro": "目录测试简介"}
             if parsed.path == "/search-directory":
                 payload = {"books": [{"idx": 0, "titles": ["目录测试书"], "author": "测试作者", "url": "/book-directory"}]}

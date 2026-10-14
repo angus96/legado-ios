@@ -10,6 +10,7 @@ enum StabilityTestBootstrap {
         UserDefaults.standard.set(0, forKey: "app.defaultHomePage")
         // 每次 UI 测试启动都会创建新数据库，旧书源编号不属于本次测试数据。
         UserDefaults.standard.removeObject(forKey: "search.selectedSourceIDs")
+        UserDefaults.standard.removeObject(forKey: "search.mode")
         let rules: [String: Any] = [
             "ruleSearch": ["bookList": "$.books", "name": "$.titles[{$.idx}]", "author": "$.author", "bookUrl": "$.url"],
             "ruleBookInfo": ["name": "$.name", "author": "$.author", "tocUrl": "$.toc",
@@ -28,6 +29,9 @@ enum StabilityTestBootstrap {
             if ProcessInfo.processInfo.environment["LEGADO_DIRECTORY_REGRESSION"] == "1" {
                 source["enabled"] = kind == "current"
                 source["searchUrl"] = base + "/search-directory"
+            }
+            if ProcessInfo.processInfo.environment["LEGADO_AUTHOR_SEARCH"] == "1" {
+                source["searchUrl"] = base + "/search-author?key={{key}}"
             }
             if kind != "missing" {
                 source["enabledExplore"] = true

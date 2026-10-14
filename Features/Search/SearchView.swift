@@ -15,6 +15,7 @@ struct SearchView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 searchNavBar
+                searchModePicker
                 progressView
                 contentView
             }
@@ -57,7 +58,7 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundColor(.secondary)
             
-            TextField("搜索", text: $viewModel.searchText)
+            TextField(viewModel.searchMode == .author ? "输入作者名" : "输入书名或作者", text: $viewModel.searchText)
                 .accessibilityIdentifier("search.keyword")
                 .textFieldStyle(.plain)
                 .focused($isSearchFocused)
@@ -71,6 +72,8 @@ struct SearchView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
+                .accessibilityLabel("清空搜索")
+                .accessibilityIdentifier("search.clear")
             }
         }
         .padding(8)
@@ -78,6 +81,23 @@ struct SearchView: View {
         .cornerRadius(8)
         .padding(.horizontal)
         .padding(.vertical, 8)
+    }
+
+    private var searchModePicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("搜索方式", selection: $viewModel.searchMode) {
+                Text("综合").tag(SearchViewModel.SearchMode.all)
+                Text("按作者").tag(SearchViewModel.SearchMode.author)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("search.mode")
+            if viewModel.searchMode == .author {
+                Text("只显示作者名包含关键词的书。部分书源仅支持搜书名，可能搜不到作者。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.horizontal)
     }
     
     private var progressView: some View {
@@ -175,12 +195,21 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 48))
                 .foregroundColor(.secondary)
-            Text(viewModel.isSearching ? "正在向书源查找书籍…" :
-                 (viewModel.hasSearched ? (viewModel.wasCancelled ? "搜索已停止" : "没有找到相关书籍") : "输入书名或作者开始搜索"))
+            Text(emptyStateMessage)
                 .font(.subheadline)
                 .foregroundColor(.secondary)
+                .accessibilityIdentifier("search.empty")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyStateMessage: String {
+        if viewModel.isSearching { return "正在向书源查找书籍…" }
+        if !viewModel.hasSearched {
+            return viewModel.searchMode == .author ? "输入作者名开始搜索" : "输入书名或作者开始搜索"
+        }
+        if viewModel.wasCancelled { return "搜索已停止" }
+        return viewModel.searchMode == .author ? "没有找到作者匹配的书" : "没有找到相关书籍"
     }
     
     private var resultsListView: some View {
