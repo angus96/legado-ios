@@ -98,6 +98,7 @@ class PageDelegate {
     }
     
     func computeScroll(at timestamp: CFTimeInterval = CACurrentMediaTime()) {
+        guard isStarted else { return }
         if computeScrollOffset(at: timestamp) {
             readView?.setTouchPoint(scrollerCurrX, scrollerCurrY, anim: false)
         } else if isStarted {

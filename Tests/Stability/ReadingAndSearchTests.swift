@@ -282,6 +282,112 @@ final class ReadingAndSearchTests: XCTestCase {
         view.dispose()
     }
 
+    func testScrollDragStartsWithoutReplayingTheTouchSlop() {
+        let (view, scroll) = makeTouchScrollView()
+        defer { view.dispose() }
+        scroll.scroll(by: -120)
+        let touch = FixtureReaderTouch()
+        touch.send(.began, to: view, y: 360, at: 1)
+        touch.send(.moved, to: view, y: 356, at: 1.02)
+        touch.send(.moved, to: view, y: 351, at: 1.04)
+        XCTAssertEqual(scroll.offset, -120, accuracy: 0.001, "点击容差内不能移动正文")
+        touch.send(.moved, to: view, y: 349, at: 1.06)
+        XCTAssertEqual(scroll.offset, -120, accuracy: 0.001, "识别拖动时不能突然补上之前的 11 点")
+        touch.send(.moved, to: view, y: 348.5, at: 1.07)
+        XCTAssertEqual(scroll.offset, -120.5, accuracy: 0.001)
+        touch.send(.moved, to: view, y: 347.25, at: 1.08)
+        XCTAssertEqual(scroll.offset, -121.75, accuracy: 0.001)
+        touch.send(.moved, to: view, y: 348.5, at: 1.09)
+        XCTAssertEqual(scroll.offset, -120.5, accuracy: 0.001, "反向移动也应逐点跟手")
+        touch.send(.cancelled, to: view, y: 348.5, at: 1.10)
+        XCTAssertFalse(scroll.isStarted)
+
+        touch.send(.began, to: view, y: 400, at: 2)
+        touch.send(.moved, to: view, y: 425, at: 2.02)
+        XCTAssertEqual(scroll.offset, -120.5, accuracy: 0.001, "向下拖动的首个采样也不能跳动")
+        touch.send(.moved, to: view, y: 425.75, at: 2.03)
+        XCTAssertEqual(scroll.offset, -119.75, accuracy: 0.001)
+        touch.send(.cancelled, to: view, y: 425.75, at: 2.04)
+    }
+
+    func testScrollReleaseUsesTouchTimeAndDropsVelocityAfterHoldingStill() {
+        let (view, scroll) = makeTouchScrollView()
+        defer { view.dispose() }
+        let touch = FixtureReaderTouch()
+        touch.send(.began, to: view, y: 360, at: 1)
+        touch.send(.moved, to: view, y: 349, at: 1.02)
+        touch.send(.moved, to: view, y: 329, at: 1.04)
+        touch.send(.ended, to: view, y: 329, at: 1.05)
+        XCTAssertTrue(scroll.isStarted, "连续拖动后松手仍应有惯性")
+        XCTAssertTrue(view.isScroll)
+
+        touch.send(.began, to: view, y: 360, at: 2)
+        touch.send(.moved, to: view, y: 349, at: 2.02)
+        touch.send(.moved, to: view, y: 329, at: 2.04)
+        let heldOffset = scroll.offset
+        touch.send(.ended, to: view, y: 329, at: 2.30)
+        XCTAssertFalse(scroll.isStarted, "停住后松手不能重新滑动")
+        XCTAssertFalse(view.isScroll)
+        XCTAssertEqual(scroll.offset, heldOffset, accuracy: 0.001)
+    }
+
+    func testTouchStopsScrollInPlaceWithoutTurningPageAndPreservesOrdinaryTap() {
+        let (view, scroll) = makeTouchScrollView()
+        defer { view.dispose() }
+        let callback = CountingReaderCallback()
+        view.callBack = callback
+        let savedCenterAction = AppConfig.clickActionMC
+        let savedRightAction = AppConfig.clickActionMR
+        AppConfig.clickActionMC = 0
+        AppConfig.clickActionMR = 1
+        defer {
+            AppConfig.clickActionMC = savedCenterAction
+            AppConfig.clickActionMR = savedRightAction
+        }
+        scroll.scroll(by: -120)
+        view.setStartPoint(0, 0, anim: false)
+        scroll.fling(startX: 0, startY: 0, velocityX: 0, velocityY: -400,
+                     minX: 0, maxX: 0, minY: -720, maxY: 720)
+        scroll.computeScroll(at: CACurrentMediaTime() + 0.02)
+        let stoppedOffset = scroll.offset
+        let touch = FixtureReaderTouch()
+        touch.send(.began, to: view, x: 340, y: 360, at: 1)
+        XCTAssertFalse(scroll.isStarted)
+        XCTAssertEqual(scroll.offset, stoppedOffset, accuracy: 0.001, "按下时保留当前正文位置")
+        scroll.computeScroll(at: CACurrentMediaTime() + 1)
+        XCTAssertEqual(scroll.offset, stoppedOffset, accuracy: 0.001, "已取消动画的刷新不能继续推动正文")
+        touch.send(.ended, to: view, x: 340, y: 360, at: 1.05)
+        XCTAssertFalse(scroll.isStarted, "点停惯性不能同时触发右侧翻页")
+        XCTAssertEqual(callback.menuCount, 0)
+        touch.send(.began, to: view, y: 360, at: 2)
+        touch.send(.moved, to: view, y: 355, at: 2.01)
+        touch.send(.ended, to: view, y: 355, at: 2.05)
+        XCTAssertEqual(callback.menuCount, 1, "普通点击仍应打开菜单")
+        XCTAssertEqual(scroll.offset, stoppedOffset, accuracy: 0.001)
+    }
+
+    private func makeTouchScrollView() -> (ReadView, ScrollPageDelegate) {
+        let text = chapter()
+        for index in 0..<3 {
+            let page = TextPage(text: "第\(index)页正文")
+            page.index = index
+            page.isCompleted = true
+            text.appendPage(page)
+        }
+        text.isCompleted = true
+        ReadBook.shared.msg = nil
+        let source = FixturePageSource(chapter: text)
+        source.pageIndex = 1
+        let view = ReadView(frame: CGRect(x: 0, y: 0, width: 390, height: 720))
+        view.pageFactory = TextPageFactory(dataSource: source)
+        view.layoutIfNeeded()
+        view.upContent()
+        let scroll = ScrollPageDelegate(readView: view)
+        view.pageDelegate = scroll
+        scroll.setViewSize(width: view.width, height: view.height)
+        return (view, scroll)
+    }
+
     private func rgba(_ image: UIImage) throws -> [UInt8] {
         let cgImage = try XCTUnwrap(image.cgImage)
         var pixels = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
@@ -522,4 +628,44 @@ private final class CountingReadView: ReadView {
         redrawRequests += 1
         super.setNeedsDisplay()
     }
+}
+
+/// 通过 ReadView 的真实触摸入口重放采样，覆盖点击容差和代理之间的衔接。
+@MainActor
+private final class FixtureReaderTouch: UITouch {
+    private var point = CGPoint.zero
+    private var samplePhase: UITouch.Phase = .began
+    private var sampleTime: TimeInterval = 0
+    override var phase: UITouch.Phase { samplePhase }
+    override var timestamp: TimeInterval { sampleTime }
+    override func location(in view: UIView?) -> CGPoint { point }
+
+    func send(_ phase: UITouch.Phase, to view: ReadView, x: CGFloat = 190,
+              y: CGFloat, at timestamp: TimeInterval) {
+        point = CGPoint(x: x, y: y)
+        samplePhase = phase
+        sampleTime = timestamp
+        switch phase {
+        case .began: view.touchesBegan([self], with: nil)
+        case .moved: view.touchesMoved([self], with: nil)
+        case .ended: view.touchesEnded([self], with: nil)
+        case .cancelled: view.touchesCancelled([self], with: nil)
+        default: break
+        }
+    }
+}
+
+@MainActor
+private final class CountingReaderCallback: ReadViewCallBack {
+    private(set) var menuCount = 0
+    func showActionMenu() { menuCount += 1 }
+    func hideActionMenu() {}
+    func addBookmark() {}
+    func showTextActionMenu() {}
+    func screenOffTimerStart() {}
+    func upSystemUiVisibility() {}
+    func autoPageStop() {}
+    func upContent() {}
+    func upMenuView() {}
+    func upPageAnim() {}
 }

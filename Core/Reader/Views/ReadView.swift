@@ -195,6 +195,8 @@ class ReadView: UIView, ReadViewProtocol {
         
         if pageDelegate?.isMoved == false && !isMove {
             if !longPressed && !pressOnTextSelected {
+                // 点停惯性只负责停在当前位置，不能同时触发菜单或翻页。
+                if isAbortAnim && pageDelegate is ScrollPageDelegate { return }
                 if !curPage.onClick(startX, startY) {
                     onSingleTapUp()
                 }

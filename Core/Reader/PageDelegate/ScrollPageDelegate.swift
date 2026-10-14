@@ -103,7 +103,7 @@ class ScrollPageDelegate: PageDelegate {
 
     override func onTouch(event: UITouch, view: UIView) {
         let y = event.location(in: view).y
-        let now = CACurrentMediaTime()
+        let now = event.timestamp
         switch event.phase {
         case .began:
             abortAnim()
@@ -112,13 +112,23 @@ class ScrollPageDelegate: PageDelegate {
             velocity = 0
             setBitmap()
         case .moved:
+            // ReadView 越过点击容差后才转发移动。以此刻为拖动起点，
+            // 避免把被忽略的前 10 点位移一次性补到正文上。
+            guard isMoved else {
+                isMoved = true
+                previousTouchY = y
+                previousTime = now
+                velocity = 0
+                return
+            }
             let delta = y - previousTouchY
             if now > previousTime { velocity = max(-2500, min(2500, delta / (now - previousTime))) }
             previousTouchY = y
             previousTime = now
-            isMoved = true
             scroll(by: delta)
         case .ended:
+            // 手指已经停住时不能沿用最后一次移动的速度再次滑动。
+            if now - previousTime > 0.1 { velocity = 0 }
             readView?.setStartPoint(0, 0, anim: false)
             onAnimStart(animationSpeed: readView?.defaultAnimationSpeed ?? 300)
         case .cancelled:
@@ -173,15 +183,17 @@ class ScrollPageDelegate: PageDelegate {
     override func stopScroll() {
         isStarted = false
         abortScrollerAnimation()
+        velocity = 0
         isMoved = false
         isRunning = offset != 0
         readView?.invalidate()
     }
 
     override func abortAnim() {
+        let wasScrolling = isStarted
         stopScroll()
         readView?.onScrollAnimStop()
-        readView?.isAbortAnim = false
+        readView?.isAbortAnim = wasScrolling
     }
 
     override func onDestroy() {
