@@ -22,6 +22,10 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
+    <key>UIFileSharingEnabled</key>
+    <true/>
     <key>CADisableMinimumFrameDurationOnPhone</key>
     <true/>
     <!-- 用户添加的书源可能使用 HTTP，或从 HTTPS 重定向至 HTTP。 -->
@@ -69,8 +73,14 @@
         <dict>
             <key>CFBundleTypeName</key>
             <string>Text File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
             <key>LSHandlerRank</key>
             <string>Alternate</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>txt</string>
+            </array>
             <key>LSItemContentTypes</key>
             <array>
                 <string>public.plain-text</string>

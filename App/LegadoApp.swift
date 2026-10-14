@@ -13,8 +13,9 @@ import CoreData
 struct LegadoApp: App {
     @AppStorage("hasCompletedWelcome") private var hasCompletedWelcome = false
     
-    @State private var importedFileURL: URL?
-    @State private var showFileImport = false
+    @State private var incomingFile: IncomingFile?
+    @State private var returnToBookshelf = false
+    @State private var didOpenTestFile = false
     @State private var unsupportedFileError = false
 
     init() {
@@ -27,41 +28,47 @@ struct LegadoApp: App {
     
     var body: some Scene {
         WindowGroup {
-            if hasCompletedWelcome {
-                MainTabView()
-                    .environment(\.managedObjectContext, CoreDataStack.shared.viewContext)
-                    .withRouter()
-                    .onOpenURL { url in
-                        handleOpenURL(url)
-                    }
-                    .sheet(isPresented: $showFileImport) {
-                        if let url = importedFileURL {
-                            FileAssociationHandler(url: url)
-                        }
-                    }
-                    .alert("不支持的文件类型", isPresented: $unsupportedFileError) {
-                        Button("确定", role: .cancel) { }
-                    } message: {
-                        Text("Legado 仅支持打开 TXT、EPUB 和 JSON 文件。")
-                    }
-            } else {
-                WelcomeView()
-                    .environment(\.managedObjectContext, CoreDataStack.shared.viewContext)
-                    .onOpenURL { url in
-                        // 欢迎页也处理，但等完成欢迎后再显示
-                        handleOpenURL(url)
-                    }
+            Group {
+                if let file = incomingFile {
+                    FileAssociationHandler(url: file.url, automaticallyImportText: true, onImported: {
+                        hasCompletedWelcome = true
+                        returnToBookshelf = true
+                    }, onClose: { incomingFile = nil })
+                    .id(file.id)
+                } else if hasCompletedWelcome {
+                    MainTabView(initialTab: returnToBookshelf ? 0 : nil).withRouter()
+                } else {
+                    WelcomeView()
+                }
+            }
+            .environment(\.managedObjectContext, CoreDataStack.shared.viewContext)
+            .onOpenURL(perform: handleOpenURL)
+            .alert("不支持的文件类型", isPresented: $unsupportedFileError) {
+                Button("确定", role: .cancel) { }
+            } message: {
+                Text("Legado 支持接收 TXT、EPUB 和 JSON 文件。")
+            }
+            .task {
+                #if DEBUG
+                guard !didOpenTestFile else { return }
+                didOpenTestFile = true
+                if let file = try? StabilityTestBootstrap.incomingTextFixture() { handleOpenURL(file) }
+                #endif
             }
         }
     }
-    
+
+    private struct IncomingFile: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
+
     private func handleOpenURL(_ url: URL) {
         let ext = url.pathExtension.lowercased()
         let supportedExtensions = ["txt", "epub", "json"]
         
-        if supportedExtensions.contains(ext) {
-            importedFileURL = url
-            showFileImport = true
+        if url.isFileURL && supportedExtensions.contains(ext) {
+            incomingFile = IncomingFile(url: url)
         } else {
             unsupportedFileError = true
         }

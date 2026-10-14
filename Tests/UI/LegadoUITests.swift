@@ -2,6 +2,36 @@ import XCTest
 
 final class LegadoUITests: XCTestCase {
     @MainActor
+    func testIncomingTextIsAutomaticallySavedAndCanBeReadFromTheShelf() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["LEGADO_UI_TESTS"] = "1"
+        app.launchEnvironment["LEGADO_SHARED_TXT"] = "1"
+        app.launchEnvironment["LEGADO_FIXTURE_URL"] = "http://127.0.0.1:8766"
+        app.launchArguments = ["-com.apple.CoreData.ConcurrencyDebug", "1"]
+        app.launch()
+        let status = app.staticTexts["fileImport.status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 15))
+        XCTAssertEqual(status.label, "已加入书架")
+        XCTAssertTrue(app.staticTexts["共 3 章 · 可离线阅读"].exists)
+        capture(app, name: "分享TXT-自动加入书架")
+        app.buttons["fileImport.read"].tap()
+        let canvas = app.descendants(matching: .any)["reader.canvas"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "这是从其他应用分享的文本"), object: canvas)], timeout: 15)
+        capture(app, name: "分享TXT-本地正文可阅读")
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        app.buttons["reader.back"].tap()
+        XCTAssertTrue(app.buttons["fileImport.bookshelf"].waitForExistence(timeout: 10))
+        app.buttons["fileImport.bookshelf"].tap()
+        XCTAssertTrue(app.staticTexts["分享的星河"].firstMatch.waitForExistence(timeout: 10))
+        capture(app, name: "分享TXT-书架显示本地书籍")
+        app.staticTexts["分享的星河"].firstMatch.tap()
+        XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "这是从其他应用分享的文本"), object: canvas)], timeout: 15)
+    }
+
+    @MainActor
     func testAuthorSearchFiltersResultsAndRemembersTheSelectedMode() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

@@ -231,6 +231,12 @@ final class TxtFileParser {
     }
 
     private static func detectEncoding(for data: Data) throws -> EncodingCandidate {
+        if data.starts(with: [0xFF, 0xFE]) {
+            return EncodingCandidate(encoding: .utf16LittleEndian, name: "UTF-16LE")
+        }
+        if data.starts(with: [0xFE, 0xFF]) {
+            return EncodingCandidate(encoding: .utf16BigEndian, name: "UTF-16BE")
+        }
         if data.starts(with: [0xEF, 0xBB, 0xBF]) {
             return EncodingCandidate(encoding: .utf8, name: "UTF-8")
         }

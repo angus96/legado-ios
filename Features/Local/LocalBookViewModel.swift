@@ -28,6 +28,20 @@ class LocalBookViewModel: ObservableObject {
         errorMessage = nil
         successMessage = nil
 
+        if url.pathExtension.lowercased() == "txt" {
+            defer { isImporting = false }
+            do {
+                let book = try await LocalTextBookImporter.shared.importBook(url: url)
+                successMessage = "已加入书架：\(book.name)，共 \(book.totalChapterNum) 章"
+                LocalBookScanner.shared.markScanned(url)
+                await loadLocalBooks()
+                return book
+            } catch {
+                errorMessage = "导入失败：\(error.localizedDescription)"
+                throw error
+            }
+        }
+
         DebugLogger.shared.log("importBook 开始: \(url.path)")
         DebugLogger.shared.dumpCoreDataState()
 

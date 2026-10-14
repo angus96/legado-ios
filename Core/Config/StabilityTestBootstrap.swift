@@ -3,6 +3,16 @@ import Foundation
 
 @MainActor
 enum StabilityTestBootstrap {
+    static func incomingTextFixture() throws -> URL? {
+        guard ProcessInfo.processInfo.environment["LEGADO_UI_TESTS"] == "1",
+              ProcessInfo.processInfo.environment["LEGADO_SHARED_TXT"] == "1" else { return nil }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SharedTextFixture", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("分享的星河.TXT")
+        try "引言：这是从其他应用分享的文本。\n第1章 星河\n第一章分享正文，保存后可以离线阅读。\n第2章 远行\n第二章分享正文，章节完整保留。".write(to: file, atomically: true, encoding: .utf8)
+        return file
+    }
+
     static func prepareIfRequested() {
         guard ProcessInfo.processInfo.environment["LEGADO_UI_TESTS"] == "1" else { return }
         let base = ProcessInfo.processInfo.environment["LEGADO_FIXTURE_URL"] ?? "http://127.0.0.1:8766"

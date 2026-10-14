@@ -86,6 +86,10 @@ struct BookshelfView: View {
                                                          object: viewContext)) { _ in
             viewModel.pruneUnavailableBooks()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .localBookImported)) { _ in
+            selectedGroupId = nil
+            Task { await viewModel.loadBooks() }
+        }
         .refreshable {
             await viewModel.refreshBooks()
         }

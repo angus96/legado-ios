@@ -117,7 +117,14 @@ extension Book {
             return url.isFileURL ? url : nil
         }
 
-        return URL(fileURLWithPath: raw)
+        let file = URL(fileURLWithPath: raw)
+        if isLocal, file.deletingLastPathComponent().lastPathComponent == "LocalBooks",
+           !FileManager.default.fileExists(atPath: file.path) {
+            // 覆盖安装或设备迁移后，正文跟随当前应用的数据目录读取。
+            return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("LocalBooks", isDirectory: true).appendingPathComponent(file.lastPathComponent)
+        }
+        return file
     }
     
     var isLocal: Bool {

@@ -93,6 +93,8 @@ struct ReadMenu: View {
                         .foregroundColor(primaryText)
                         .frame(width: 44, height: 44)
                 }
+                .accessibilityLabel("返回")
+                .accessibilityIdentifier("reader.back")
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(book?.name ?? "")

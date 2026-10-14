@@ -292,13 +292,7 @@ enum LocalBook {
     static func getContent(_ book: Book, _ bookChapter: BookChapter) -> String? {
         let fileURL: URL?
         
-        if book.bookUrl.hasPrefix("file://") {
-            fileURL = URL(string: book.bookUrl)
-        } else if book.bookUrl.hasPrefix("/") {
-            fileURL = URL(fileURLWithPath: book.bookUrl)
-        } else {
-            fileURL = URL(fileURLWithPath: book.bookUrl)
-        }
+        fileURL = book.localFileURL
         
         guard let url = fileURL else { return nil }
         

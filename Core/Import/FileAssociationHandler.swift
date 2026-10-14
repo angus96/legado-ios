@@ -3,169 +3,124 @@ import UniformTypeIdentifiers
 
 struct FileAssociationHandler: View {
     let url: URL
+    var automaticallyImportText = false
+    var onImported: () -> Void = {}
+    var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
-    @State private var fileType: FileType = .unknown
     @State private var isImporting = false
+    @State private var didAttemptAutomaticImport = false
     @State private var importResult: String?
-    
-    enum FileType {
-        case txt, epub, json, unknown
-        
-        var displayName: String {
-            switch self {
-            case .txt: return "TXT 文本"
-            case .epub: return "EPUB 电子书"
-            case .json: return "JSON 文件"
-            case .unknown: return "未知类型"
-            }
-        }
-    }
-    
+    @State private var importSucceeded = false
+    @State private var importedBookID: UUID?
+    @State private var bookName = ""
+    @State private var chapterCount = 0
+    @State private var canContinueReading = false
+    @State private var showingReader = false
+
+    private var isBook: Bool { ["txt", "epub"].contains(url.pathExtension.lowercased()) }
+    private var isSupported: Bool { isBook || url.pathExtension.lowercased() == "json" }
+
     var body: some View {
-        NavigationView {
-            List {
-                Section("文件信息") {
-                    HStack {
-                        Text("文件名")
-                        Spacer()
-                        Text(url.lastPathComponent)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    Image(systemName: importSucceeded ? "checkmark.circle.fill" : "doc.text")
+                        .font(.system(size: 52, weight: .light))
+                        .foregroundStyle(importSucceeded ? Color.green : Color.accentColor)
+                        .padding(.top, 24)
+                    VStack(spacing: 10) {
+                        Text(importSucceeded && isBook ? bookName : url.deletingPathExtension().lastPathComponent)
+                            .font(.title2.weight(.semibold))
+                            .multilineTextAlignment(.center)
+                        Text(url.lastPathComponent).font(.footnote).foregroundStyle(.secondary)
+                        if isImporting {
+                            ProgressView("正在保存到书架")
+                        } else if let result = importResult {
+                            Text(result)
+                                .foregroundStyle(importSucceeded ? Color.secondary : Color.red)
+                                .multilineTextAlignment(.center)
+                                .accessibilityIdentifier("fileImport.status")
+                        }
                     }
-                    
-                    HStack {
-                        Text("类型")
-                        Spacer()
-                        Text(fileType.displayName)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                Section {
-                    Button(action: importFile) {
-                        HStack {
-                            if isImporting {
-                                ProgressView()
-                                    .scaleEffect(0.8)
+                    if let bookID = importedBookID {
+                        VStack(spacing: 12) {
+                            Text("共 \(chapterCount) 章 · 可离线阅读").font(.subheadline).foregroundStyle(.secondary)
+                            Button { showingReader = true } label: {
+                                Label(canContinueReading ? "继续阅读" : "开始阅读", systemImage: "book")
+                                    .frame(maxWidth: .infinity, minHeight: 44)
                             }
-                            Text("导入到应用")
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("fileImport.read")
+                            Text("正文已保存在本机，原文件移除后仍可阅读。")
+                                .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }
+                        .navigationDestination(isPresented: $showingReader) { ReaderView(bookId: bookID) }
+                    } else if !importSucceeded {
+                        Button(importResult == nil ? (isBook ? "加入书架" : "导入书源") : "重试导入") {
+                            Task { await importFile() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isImporting || !isSupported)
+                        .accessibilityIdentifier("fileImport.retry")
                     }
-                    .disabled(isImporting || fileType == .unknown)
-                    
-                    Button(action: { shareFile() }) {
-                        HStack {
-                            Image(systemName: "square.and.arrow.up")
-                            Text("分享文件")
-                        }
+                    if importSucceeded {
+                        Button("返回书架", action: close)
+                            .accessibilityIdentifier("fileImport.bookshelf")
                     }
                 }
-                
-                if let result = importResult {
-                    Section("结果") {
-                        Text(result)
-                            .font(.caption)
-                            .foregroundColor(result.contains("成功") ? .green : .red)
-                    }
-                }
+                .frame(maxWidth: 540)
+                .padding(24)
+                .frame(maxWidth: .infinity)
             }
-            .navigationTitle("打开文件")
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle(isBook ? "导入书籍" : "导入文件")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("关闭") { dismiss() }
+                    Button("关闭", action: close).disabled(isImporting)
+                        .accessibilityIdentifier("fileImport.close")
                 }
             }
-        }
-        .onAppear {
-            detectFileType()
-        }
-    }
-    
-    private func detectFileType() {
-        let ext = url.pathExtension.lowercased()
-        switch ext {
-        case "txt":
-            fileType = .txt
-        case "epub":
-            fileType = .epub
-        case "json":
-            fileType = .json
-        default:
-            fileType = .unknown
+            .task {
+                guard automaticallyImportText, url.pathExtension.lowercased() == "txt", !didAttemptAutomaticImport else { return }
+                didAttemptAutomaticImport = true
+                await importFile()
+            }
         }
     }
-    
-    private func importFile() {
-        guard !isImporting else { return }
+
+    private func close() {
+        if let onClose { onClose() } else { dismiss() }
+    }
+
+    @MainActor
+    private func importFile() async {
+        guard !isImporting, !importSucceeded else { return }
         isImporting = true
         importResult = nil
-        
-        Task {
-            do {
-                switch fileType {
-                case .txt, .epub:
-                    try await importBook()
-                case .json:
-                    try await importJson()
-                case .unknown:
-                    importResult = "不支持的文件类型"
+        defer { isImporting = false }
+        do {
+            if isBook {
+                let book = try await LocalBookViewModel().importBook(url: url)
+                bookName = book.name
+                chapterCount = Int(book.totalChapterNum)
+                canContinueReading = book.durChapterIndex > 0 || book.durChapterPos > 0
+                importedBookID = book.bookId
+                importResult = "已加入书架"
+            } else if url.pathExtension.lowercased() == "json" {
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                let text = try String(contentsOf: url, encoding: .utf8)
+                importResult = try await withCheckedThrowingContinuation { continuation in
+                    URLSchemeHandler.importBookSourceJSON(text) { continuation.resume(with: $0) }
                 }
-            } catch {
-                importResult = "导入失败: \(error.localizedDescription)"
+            } else {
+                throw LocalBookError.unsupportedFormat
             }
-            
-            await MainActor.run {
-                isImporting = false
-            }
-        }
-    }
-    
-    @MainActor
-    private func importBook() async throws {
-        let importer = LocalBookViewModel()
-        _ = try await importer.importBook(url: url)
-        importResult = "成功添加到书架"
-    }
-    
-    private func importJson() async throws {
-        let data = try Data(contentsOf: url)
-        guard let jsonString = String(data: data, encoding: .utf8) else {
-            throw NSError(domain: "FileAssociation", code: 1, userInfo: [NSLocalizedDescriptionKey: "无法读取文件"])
-        }
-        
-        let count: Int
-        if jsonString.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[") {
-            count = await importBookSources(jsonString)
-        } else {
-            count = await importBookSources(jsonString)
-        }
-        
-        importResult = count > 0 ? "成功导入 \(count) 个书源" : "导入失败"
-    }
-    
-    private func importBookSources(_ jsonString: String) async -> Int {
-        var result: Int = 0
-        await withCheckedContinuation { continuation in
-            URLSchemeHandler.importBookSourceJSON(jsonString) { res in
-                switch res {
-                case .success:
-                    result = 1
-                case .failure:
-                    result = 0
-                }
-                continuation.resume()
-            }
-        }
-        return result
-    }
-    
-    private func shareFile() {
-        let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
-            rootViewController.present(activityVC, animated: true)
+            importSucceeded = true
+            onImported()
+        } catch {
+            importResult = "导入失败：\(error.localizedDescription)"
         }
     }
 }

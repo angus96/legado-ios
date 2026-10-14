@@ -9,6 +9,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct MainTabView: View {
+    var initialTab: Int? = nil
     @State private var selectedTab = 0
     @AppStorage("app.defaultHomePage") private var defaultHomePage = 0
     @AppStorage("app.showDiscoveryPage") private var showDiscoveryPage = true
@@ -51,10 +52,11 @@ struct MainTabView: View {
             selectedTheme == "light" ? .light : nil
         )
         .onAppear {
-            selectedTab = availableTab(defaultHomePage)
+            selectedTab = availableTab(initialTab ?? defaultHomePage)
         }
         .onChange(of: showDiscoveryPage) { _ in selectedTab = availableTab(selectedTab) }
         .onChange(of: showRssPage) { _ in selectedTab = availableTab(selectedTab) }
+        .onReceive(NotificationCenter.default.publisher(for: .localBookImported)) { _ in selectedTab = 0 }
     }
 
     private func availableTab(_ tab: Int) -> Int {
