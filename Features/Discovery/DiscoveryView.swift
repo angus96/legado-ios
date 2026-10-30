@@ -15,6 +15,7 @@ struct DiscoveryView: View {
     
     var body: some View {
         VStack(spacing: 0) {
+            header
             if let group = viewModel.selectedGroup {
                 categories(group)
                 if group.isLoading {
@@ -52,33 +53,7 @@ struct DiscoveryView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle("发现")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) { Text("发现").font(.title3.weight(.bold)) }
-            ToolbarItem(placement: .principal) {
-                Button { showingSources = true } label: {
-                    HStack(spacing: 5) {
-                        Text(viewModel.selectedGroup?.sourceName ?? "选择书源").lineLimit(1)
-                        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
-                    }
-                    .font(.subheadline.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 7)
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
-                    .frame(maxWidth: 180)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("当前书源：" + (viewModel.selectedGroup?.sourceName ?? "选择书源"))
-                .accessibilityIdentifier("discovery.sourcePicker")
-            }
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button { showingSearch = true } label: { Image(systemName: "magnifyingglass") }
-                    .accessibilityLabel("搜书")
-                Menu {
-                    Button("刷新分类") { Task { await viewModel.refresh() } }
-                    Button("校验当前书源", action: checkSource).disabled(viewModel.selectedGroup == nil)
-                    Button("管理书源") { showingSourceManage = true }
-                } label: { Image(systemName: "ellipsis.circle") }
-                .accessibilityLabel("发现页操作")
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
         .task {
             await viewModel.loadExploreGroups()
             viewModel.restoreSelection()
@@ -100,7 +75,7 @@ struct DiscoveryView: View {
         }
         .navigationDestination(isPresented: $showingBookDetail) {
             if let book = selectedBook {
-                BookDetailView(result: book).id(book.id)
+                BookDetailView(result: book).id(book.id).toolbar(.visible, for: .navigationBar)
             }
         }
         .alert("加载失败", isPresented: Binding(
@@ -111,6 +86,36 @@ struct DiscoveryView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+                Text("发现").font(.title2.weight(.bold))
+                Spacer(minLength: 4)
+                Button { showingSources = true } label: {
+                    HStack(spacing: 5) {
+                        Text(viewModel.selectedGroup?.sourceName ?? "选择书源").lineLimit(1)
+                        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                    }
+                    .font(.subheadline.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 7)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
+                    .frame(maxWidth: 175)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("当前书源：" + (viewModel.selectedGroup?.sourceName ?? "选择书源"))
+                .accessibilityIdentifier("discovery.sourcePicker")
+                Button { showingSearch = true } label: { Image(systemName: "magnifyingglass") }
+                    .frame(minWidth: 32, minHeight: 44).accessibilityLabel("搜书")
+                Menu {
+                    Button("刷新分类") { Task { await viewModel.refresh() } }
+                    Button("校验当前书源", action: checkSource).disabled(viewModel.selectedGroup == nil)
+                    Button("管理书源") { showingSourceManage = true }
+                } label: { Image(systemName: "ellipsis.circle").frame(minWidth: 32, minHeight: 44) }
+                .accessibilityLabel("发现页操作")
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 18).padding(.vertical, 6)
+        .background(Color(.systemBackground))
     }
     
     private func categories(_ group: ExploreGroup) -> some View {
