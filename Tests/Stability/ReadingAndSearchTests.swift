@@ -1,6 +1,7 @@
 import XCTest
 import CoreData
 import UIKit
+import Combine
 @testable import Legado
 
 private actor SearchResponseGate {
@@ -44,6 +45,143 @@ final class ReadingAndSearchTests: XCTestCase {
         book.bookUrl = "https://example.invalid/book"
         book.tocUrl = "https://example.invalid/toc"
         return book
+    }
+
+    func testDiscoveryDefersJavaScriptAndKeepsStaticCategoriesSearchable() async throws {
+        let database = try container()
+        let context = database.viewContext
+        let scripted = BookSource.create(in: context)
+        scripted.bookSourceUrl = "https://scripted.invalid"
+        scripted.bookSourceName = "动态书源"
+        scripted.enabledExplore = true
+        scripted.exploreUrl = "@js: java.ajax('https://scripted.invalid/categories')"
+        let plain = BookSource.create(in: context)
+        plain.bookSourceUrl = "https://plain.invalid"
+        plain.bookSourceName = "普通书源"
+        plain.enabledExplore = true
+        plain.exploreUrl = "奇幻::/fantasy&&历史::/history"
+        try context.save()
+        let scriptedID = scripted.sourceId
+
+        let gate = SearchResponseGate()
+        let started = expectation(description: "只解析展开的书源一次")
+        started.assertForOverFulfill = true
+        let model = DiscoveryViewModel(context: database.newBackgroundContext()) { source in
+            XCTAssertEqual(source.sourceId, scriptedID)
+            started.fulfill()
+            await gate.wait()
+            return [ExploreKind(title: "动态分类", url: "/dynamic")]
+        }
+        await model.loadExploreGroups()
+        XCTAssertEqual(model.exploreGroups.count, 2)
+        XCTAssertTrue(model.exploreGroups.allSatisfy { !$0.isLoading && !$0.isExpanded })
+        XCTAssertEqual(try XCTUnwrap(model.exploreGroups.first { $0.sourceId == scripted.sourceId }).exploreKinds.count, 0)
+        model.filterGroups(keyword: "历史")
+        XCTAssertEqual(model.filteredGroups.map(\.sourceId), [plain.sourceId])
+        model.filterGroups(keyword: "动态书源")
+
+        let loaded = expectation(description: "动态分类加载完成")
+        let subscription = model.$exploreGroups.first { $0.contains { $0.exploreKinds.first?.title == "动态分类" } }
+            .sink { _ in loaded.fulfill() }
+        model.toggleGroup(scripted.sourceId)
+        await fulfillment(of: [started], timeout: 3)
+        XCTAssertTrue(try XCTUnwrap(model.filteredGroups.first).isLoading)
+        model.toggleGroup(scripted.sourceId)
+        model.toggleGroup(scripted.sourceId)
+        await gate.release()
+        await fulfillment(of: [loaded], timeout: 3)
+        XCTAssertEqual(model.filteredGroups.map(\.sourceId), [scripted.sourceId])
+        XCTAssertFalse(try XCTUnwrap(model.filteredGroups.first).isLoading)
+        model.toggleGroup(scripted.sourceId)
+        model.toggleGroup(scripted.sourceId)
+        XCTAssertEqual(model.filteredGroups.first?.exploreKinds.first?.url, "/dynamic")
+        withExtendedLifetime(subscription) {}
+    }
+
+    func testDiscoveryCanRetryFailedCategories() async throws {
+        let database = try container()
+        let source = BookSource.create(in: database.viewContext)
+        source.bookSourceUrl = "https://example.invalid"
+        source.bookSourceName = "重试书源"
+        source.enabledExplore = true
+        source.exploreUrl = "@js: missingFunction()"
+        try database.viewContext.save()
+        var attempts = 0
+        let model = DiscoveryViewModel(context: database.newBackgroundContext()) { _ in
+            attempts += 1
+            if attempts == 1 { throw ExploreRuleParser.ParseError.invalidJavaScript }
+            return [ExploreKind(title: "重试成功", url: "/retry")]
+        }
+        await model.loadExploreGroups()
+        let failed = expectation(description: "显示分类加载失败")
+        let failureSubscription = model.$exploreGroups.first { $0.first?.errorMessage != nil }
+            .sink { _ in failed.fulfill() }
+        model.toggleGroup(source.sourceId)
+        await fulfillment(of: [failed], timeout: 3)
+        XCTAssertFalse(try XCTUnwrap(model.exploreGroups.first).isLoading)
+        let loaded = expectation(description: "重试后显示分类")
+        let successSubscription = model.$exploreGroups.first { $0.first?.exploreKinds.first?.title == "重试成功" }
+            .sink { _ in loaded.fulfill() }
+        model.retryGroup(source.sourceId)
+        await fulfillment(of: [loaded], timeout: 3)
+        XCTAssertNil(model.exploreGroups.first?.errorMessage)
+        XCTAssertEqual(attempts, 2)
+        withExtendedLifetime((failureSubscription, successSubscription)) {}
+    }
+
+    func testDiscoveryRefreshIgnoresCategoriesFromAnOlderLoad() async throws {
+        let database = try container()
+        let source = BookSource.create(in: database.viewContext)
+        source.bookSourceUrl = "https://example.invalid"
+        source.bookSourceName = "刷新书源"
+        source.enabledExplore = true
+        source.exploreUrl = "@js: '旧分类::/old'"
+        try database.viewContext.save()
+        let gate = SearchResponseGate()
+        let started = expectation(description: "旧分类正在加载")
+        let finished = expectation(description: "旧请求已返回")
+        let model = DiscoveryViewModel(context: database.newBackgroundContext()) { _ in
+            started.fulfill()
+            await gate.wait()
+            finished.fulfill()
+            return [ExploreKind(title: "旧分类", url: "/old")]
+        }
+        await model.loadExploreGroups()
+        model.toggleGroup(source.sourceId)
+        await fulfillment(of: [started], timeout: 3)
+        source.exploreUrl = "新分类::/new"
+        try database.viewContext.save()
+        model.filterGroups(keyword: "刷新")
+        await model.refresh()
+        await gate.release()
+        await fulfillment(of: [finished], timeout: 3)
+        await Task.yield()
+        XCTAssertEqual(model.filteredGroups.first?.exploreKinds.map(\.title), ["新分类"])
+        XCTAssertFalse(try XCTUnwrap(model.filteredGroups.first).isLoading)
+    }
+
+    func testDiscoveryParsesScriptValuesAndReportsScriptErrors() async throws {
+        let database = try container()
+        let source = BookSource.create(in: database.viewContext)
+        source.bookSourceUrl = "https://example.invalid"
+        source.bookSourceName = "分类解析书源"
+        source.variable = "{\"category\":\"推荐\"}"
+        source.exploreUrl = "<js>[{title: category, url: '/first'}, {title: category, url: '/second'}]</js>"
+        let kinds = try await ExploreRuleParser.parse(BookSourceSnapshot.capture(source))
+        XCTAssertEqual(kinds.map(\.title), ["推荐", "推荐"])
+        XCTAssertEqual(kinds.map(\.url), ["/first", "/second"])
+        XCTAssertEqual(Set(kinds.map(\.id)).count, 2, "同名分类仍需分别显示")
+        source.exploreUrl = "@js: ({'排行': '/ranking'})"
+        let dictionaryKinds = try await ExploreRuleParser.parse(BookSourceSnapshot.capture(source))
+        XCTAssertEqual(dictionaryKinds.first?.title, "排行")
+        XCTAssertEqual(dictionaryKinds.first?.url, "/ranking")
+        source.exploreUrl = "@js: throw new Error('broken rule')"
+        do {
+            _ = try await ExploreRuleParser.parse(BookSourceSnapshot.capture(source))
+            XCTFail("脚本异常不能显示为成功加载的空分类")
+        } catch ExploreRuleParser.ParseError.invalidJavaScript {
+            // 页面据此显示失败并允许重试。
+        }
     }
 
     func testChapterDirectoryUsesCompleteListAndKeepsIntroductions() async throws {

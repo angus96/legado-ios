@@ -162,6 +162,38 @@ final class LegadoUITests: XCTestCase {
     }
 
     @MainActor
+    func testDiscoveryOnlyRequestsExpandedCategoriesAndStaysResponsive() async throws {
+        continueAfterFailure = false
+        let key = UUID().uuidString
+        let base = "http://127.0.0.1:8766"
+        let app = XCUIApplication()
+        app.launchEnvironment["LEGADO_UI_TESTS"] = "1"
+        app.launchEnvironment["LEGADO_FIXTURE_URL"] = base
+        app.launchEnvironment["LEGADO_DISCOVERY_SLOW"] = key
+        app.launchArguments = ["-com.apple.CoreData.ConcurrencyDebug", "1"]
+        app.launch()
+        XCTAssertTrue(app.buttons["bookshelf.search"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["发现"].tap()
+        let source = app.buttons["测试原书源"]
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        let countURL = try XCTUnwrap(URL(string: base + "/explore-request-count?key=" + key))
+        let (data, _) = try await URLSession.shared.data(from: countURL)
+        let counts = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Int])
+        XCTAssertEqual(counts["requests"], 0, "打开发现页不能执行尚未展开的发现脚本")
+
+        source.tap()
+        XCTAssertTrue(app.staticTexts["正在加载分类…"].waitForExistence(timeout: 2))
+        app.tabBars.buttons["书架"].tap()
+        XCTAssertTrue(app.buttons["bookshelf.search"].waitForExistence(timeout: 2), "同步请求分类时仍能切换页面")
+        app.tabBars.buttons["发现"].tap()
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        source.tap()
+        XCTAssertTrue(app.buttons["动态测试分类"].waitForExistence(timeout: 10))
+        capture(app, name: "发现页-动态分类后台加载")
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    @MainActor
     func testDiscoveryKeyboardCanBeDismissedWithoutClearingTheFilter() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

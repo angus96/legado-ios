@@ -9,6 +9,8 @@ from verify_domain_pipeline import Handler
 
 
 class StabilityHandler(Handler):
+    explore_requests = {}
+    explore_lock = threading.Lock()
     image_requests = {}
     image_lock = threading.Lock()
     image = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=")
@@ -16,7 +18,19 @@ class StabilityHandler(Handler):
     def do_GET(self):
         parsed = urlsplit(self.path)
         key = parse_qs(parsed.query).get("key", [""])[0]
-        if parsed.path == "/search-author":
+        if parsed.path == "/explore-kinds":
+            with self.explore_lock:
+                self.explore_requests[key] = self.explore_requests.get(key, 0) + 1
+            time.sleep(3)
+            body = json.dumps([{"title": "动态测试分类", "url": "/explore"}], ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+        elif parsed.path == "/explore-request-count":
+            with self.explore_lock:
+                body = json.dumps({"requests": self.explore_requests.get(key, 0)}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+        elif parsed.path == "/search-author":
             books = [
                 {"idx": 0, "titles": ["遮天"], "author": "辰东", "url": "/author/book-1"},
                 {"idx": 0, "titles": ["完美世界"], "author": "辰东", "url": "/author/book-2"},

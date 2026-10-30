@@ -19,13 +19,24 @@ struct DiscoveryView: View {
         }
         .navigationTitle("发现")
         .navigationBarTitleDisplayMode(.inline)
-        .onDisappear { searchFocused = false }
+        .onDisappear {
+            searchFocused = false
+            viewModel.cancelLoading()
+        }
         .task { await viewModel.loadExploreGroups() }
         .refreshable { await viewModel.refresh() }
         .sheet(item: $viewModel.selectedExplore) { selection in
             NavigationStack {
                 ExploreResultsView(selection: selection)
             }
+        }
+        .alert("加载失败", isPresented: Binding(
+            get: { viewModel.errorMessage != nil },
+            set: { if !$0 { viewModel.errorMessage = nil } }
+        )) {
+            Button("确定", role: .cancel) { viewModel.errorMessage = nil }
+        } message: {
+            Text(viewModel.errorMessage ?? "")
         }
     }
     
@@ -91,18 +102,37 @@ struct DiscoveryView: View {
                     viewModel.toggleGroup(group.sourceId)
                 }
                 
-                if viewModel.isExpanded(group.sourceId) {
-                    ExploreKindFlexBox(group: group, kinds: group.exploreKinds) { kind in
-                        searchFocused = false
-                        viewModel.openExplore(group: group, kind: kind)
+                if group.isExpanded {
+                    if group.isLoading {
+                        HStack {
+                            ProgressView()
+                            Text("正在加载分类…")
+                                .foregroundColor(.secondary)
+                        }
+                    } else if group.exploreKinds.isEmpty {
+                        HStack {
+                            Text(group.errorMessage ?? "该书源暂无发现分类")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button("重试") { viewModel.retryGroup(group.sourceId) }
+                        }
+                    } else {
+                        ExploreKindFlexBox(group: group, kinds: group.exploreKinds) { kind in
+                            searchFocused = false
+                            viewModel.openExplore(group: group, kind: kind)
+                        }
+                        .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 8, trailing: 8))
+                        .listRowSeparator(.hidden)
                     }
-                    .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 8, trailing: 8))
-                    .listRowSeparator(.hidden)
                 }
             }
         }
         .listStyle(.plain)
         .scrollDismissesKeyboard(.interactively)
+        .overlay {
+            if viewModel.isLoading { ProgressView() }
+        }
     }
 }
 
@@ -145,7 +175,7 @@ struct ExploreKindFlexBox: View {
     
     var body: some View {
         FlowLayout(spacing: 8) {
-            ForEach(kinds, id: \.title) { kind in
+            ForEach(kinds) { kind in
                 ExploreKindChip(title: kind.title) {
                     onKindTap(kind)
                 }
@@ -240,12 +270,14 @@ struct ExploreKind: Identifiable {
 }
 
 struct ExploreGroup: Identifiable {
-    let id = UUID()
+    var id: UUID { sourceId }
     let sourceId: UUID
     let sourceName: String
     var exploreKinds: [ExploreKind] = []
     var isLoading = false
     var isExpanded = false
+    var hasLoadedKinds = false
+    var errorMessage: String?
 }
 
 struct ExploreSelection: Identifiable, Hashable {
@@ -258,38 +290,70 @@ struct ExploreSelection: Identifiable, Hashable {
 
 @MainActor
 class DiscoveryViewModel: ObservableObject {
+    typealias ExploreOperation = (BookSourceSnapshot) async throws -> [ExploreKind]
+
     @Published var exploreGroups: [ExploreGroup] = []
     @Published var filteredGroups: [ExploreGroup] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var selectedExplore: ExploreSelection?
     
-    private var expandedGroups: Set<UUID> = []
+    private let context: NSManagedObjectContext
+    private let operation: ExploreOperation
+    private var groupTasks: [UUID: Task<Void, Never>] = [:]
+    private var loadID = UUID()
     private var currentKeyword: String = ""
+
+    init(context: NSManagedObjectContext = CoreDataStack.shared.newBackgroundContext(),
+         operation: @escaping ExploreOperation = { try await ExploreRuleParser.parse($0) }) {
+        self.context = context
+        self.operation = operation
+    }
+
+    func cancelLoading() {
+        loadID = UUID()
+        groupTasks.values.forEach { $0.cancel() }
+        groupTasks.removeAll()
+        isLoading = false
+        for index in exploreGroups.indices { exploreGroups[index].isLoading = false }
+        filterGroups(keyword: currentKeyword)
+    }
     
     func loadExploreGroups() async {
+        cancelLoading()
+        let requestID = loadID
         isLoading = true
-        
-        let context = CoreDataStack.shared.viewContext
-        let request = BookSource.fetchRequest()
-        request.predicate = NSPredicate(format: "enabled == YES AND enabledExplore == YES")
-        request.sortDescriptors = [NSSortDescriptor(key: "bookSourceName", ascending: true)]
-        
-        if let sources = try? context.fetch(request) {
-            var groups: [ExploreGroup] = []
-            for source in sources {
-                var group = ExploreGroup(sourceId: source.sourceId, sourceName: source.bookSourceName)
-                
-                if let exploreUrl = source.exploreUrl, !exploreUrl.isEmpty {
-                    group.exploreKinds = await parseExploreUrl(exploreUrl, source: source)
+        errorMessage = nil
+        defer { if loadID == requestID { isLoading = false } }
+
+        do {
+            let context = context
+            // 只读取列表所需的字段。发现脚本可能同步请求网络，不能在这里执行。
+            let groups = try await context.perform {
+                let request = NSFetchRequest<NSDictionary>(entityName: "BookSource")
+                request.resultType = .dictionaryResultType
+                request.propertiesToFetch = ["sourceId", "bookSourceName", "exploreUrl"]
+                request.predicate = NSPredicate(format: "enabled == YES AND enabledExplore == YES")
+                request.sortDescriptors = [NSSortDescriptor(key: "bookSourceName", ascending: true)]
+                return try context.fetch(request).compactMap { values -> ExploreGroup? in
+                    guard let id = values["sourceId"] as? UUID,
+                          let name = values["bookSourceName"] as? String else { return nil }
+                    var group = ExploreGroup(sourceId: id, sourceName: name)
+                    let rule = values["exploreUrl"] as? String ?? ""
+                    if ExploreRuleParser.javaScript(in: rule) == nil {
+                        group.exploreKinds = ExploreRuleParser.parseKinds(rule)
+                        group.hasLoadedKinds = true
+                    }
+                    return group
                 }
-                groups.append(group)
             }
+            guard loadID == requestID, !Task.isCancelled else { return }
             exploreGroups = groups
-            filteredGroups = exploreGroups
+            filterGroups(keyword: currentKeyword)
+        } catch {
+            guard loadID == requestID, !Task.isCancelled else { return }
+            errorMessage = "无法读取发现书源：\(error.localizedDescription)"
         }
-        
-        isLoading = false
     }
     
     func refresh() async {
@@ -311,13 +375,59 @@ class DiscoveryViewModel: ObservableObject {
     func toggleGroup(_ sourceId: UUID) {
         if let index = exploreGroups.firstIndex(where: { $0.sourceId == sourceId }) {
             exploreGroups[index].isExpanded.toggle()
-            expandedGroups.insert(sourceId)
             filterGroups(keyword: currentKeyword)
+            if exploreGroups[index].isExpanded && !exploreGroups[index].hasLoadedKinds {
+                loadKinds(sourceId)
+            }
         }
     }
-    
-    func isExpanded(_ sourceId: UUID) -> Bool {
-        exploreGroups.first { $0.sourceId == sourceId }?.isExpanded ?? false
+
+    func retryGroup(_ sourceId: UUID) {
+        loadKinds(sourceId)
+    }
+
+    private func loadKinds(_ sourceId: UUID) {
+        guard groupTasks[sourceId] == nil,
+              let index = exploreGroups.firstIndex(where: { $0.sourceId == sourceId }) else { return }
+        exploreGroups[index].isLoading = true
+        exploreGroups[index].errorMessage = nil
+        filterGroups(keyword: currentKeyword)
+
+        let requestID = loadID
+        let context = context
+        let operation = operation
+        groupTasks[sourceId] = Task { [weak self] in
+            do {
+                let source = try await context.perform {
+                    let request = BookSource.fetchRequest()
+                    request.fetchLimit = 1
+                    request.shouldRefreshRefetchedObjects = true
+                    request.predicate = NSPredicate(format: "sourceId == %@ AND enabled == YES AND enabledExplore == YES", sourceId as CVarArg)
+                    guard let source = try context.fetch(request).first else {
+                        throw ExploreRuleParser.ParseError.sourceUnavailable
+                    }
+                    return try BookSourceSnapshot.capture(source)
+                }
+                try Task.checkCancellation()
+                let kinds = try await operation(source)
+                guard let self, self.loadID == requestID, !Task.isCancelled,
+                      let index = self.exploreGroups.firstIndex(where: { $0.sourceId == sourceId }) else { return }
+                self.exploreGroups[index].exploreKinds = kinds
+                self.exploreGroups[index].hasLoadedKinds = true
+                self.finishLoading(sourceId, index: index)
+            } catch {
+                guard let self, self.loadID == requestID, !Task.isCancelled,
+                      let index = self.exploreGroups.firstIndex(where: { $0.sourceId == sourceId }) else { return }
+                self.exploreGroups[index].errorMessage = error.localizedDescription
+                self.finishLoading(sourceId, index: index)
+            }
+        }
+    }
+
+    private func finishLoading(_ sourceId: UUID, index: Int) {
+        exploreGroups[index].isLoading = false
+        groupTasks[sourceId] = nil
+        filterGroups(keyword: currentKeyword)
     }
     
     func openExplore(group: ExploreGroup, kind: ExploreKind) {
@@ -329,9 +439,35 @@ class DiscoveryViewModel: ObservableObject {
         )
     }
     
-    private func parseExploreUrl(_ exploreUrl: String, source: BookSource) async -> [ExploreKind] {
-        let resolvedRule = resolveExploreRule(exploreUrl, source: source)
-        let trimmed = resolvedRule.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+enum ExploreRuleParser {
+    enum ParseError: LocalizedError {
+        case sourceUnavailable
+        case invalidJavaScript
+
+        var errorDescription: String? {
+            switch self {
+            case .sourceUnavailable: return "书源已停用或删除"
+            case .invalidJavaScript: return "发现分类脚本执行失败，请检查书源规则"
+            }
+        }
+    }
+
+    static func parse(_ source: BookSourceSnapshot) async throws -> [ExploreKind] {
+        // 显式离开主线程；脚本里的 java.ajax 等同步调用只阻塞本次分类加载。
+        let task = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let rule = source.exploreUrl ?? ""
+            let resolved = try javaScript(in: rule).map { try evaluateJavaScript($0, source: source) } ?? rule
+            try Task.checkCancellation()
+            return parseKinds(resolved)
+        }
+        return try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+    }
+
+    static func parseKinds(_ rule: String) -> [ExploreKind] {
+        let trimmed = rule.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
         if let data = trimmed.data(using: .utf8),
@@ -386,24 +522,24 @@ class DiscoveryViewModel: ObservableObject {
             }
     }
 
-    private func resolveExploreRule(_ exploreUrl: String, source: BookSource) -> String {
+    static func javaScript(in exploreUrl: String) -> String? {
         let trimmed = exploreUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.lowercased().hasPrefix("@js:") {
-            return evaluateExploreJavaScript(String(trimmed.dropFirst(4)), source: source) ?? ""
+            return String(trimmed.dropFirst(4))
         }
 
         if trimmed.lowercased().hasPrefix("<js>") && trimmed.lowercased().hasSuffix("</js>") {
             let start = trimmed.index(trimmed.startIndex, offsetBy: 4)
             let end = trimmed.index(trimmed.endIndex, offsetBy: -5)
-            return evaluateExploreJavaScript(String(trimmed[start..<end]), source: source) ?? ""
+            return String(trimmed[start..<end])
         }
 
-        return exploreUrl
+        return nil
     }
 
-    private func evaluateExploreJavaScript(_ script: String, source: BookSource) -> String? {
+    private static func evaluateJavaScript(_ script: String, source: BookSourceSnapshot) throws -> String {
         let context = ExecutionContext()
-        context.source = try? BookSourceSnapshot.capture(source)
+        context.source = source
         context.baseURL = URL(string: source.bookSourceUrl)
 
         if let variable = source.variable,
@@ -414,8 +550,8 @@ class DiscoveryViewModel: ObservableObject {
             }
         }
 
-        guard let value = context.jsContext.evaluateScript(script) else {
-            return nil
+        guard let value = context.jsContext.evaluateScript(script), context.jsContext.exception == nil else {
+            throw ParseError.invalidJavaScript
         }
 
         if let array = value.toArray(),
@@ -436,7 +572,7 @@ class DiscoveryViewModel: ObservableObject {
             return string
         }
 
-        return nil
+        return ""
     }
 }
 

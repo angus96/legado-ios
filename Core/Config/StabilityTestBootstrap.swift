@@ -46,6 +46,9 @@ enum StabilityTestBootstrap {
             if kind != "missing" {
                 source["enabledExplore"] = true
                 source["exploreUrl"] = "测试分类::" + base + "/explore"
+                if kind == "current", let key = ProcessInfo.processInfo.environment["LEGADO_DISCOVERY_SLOW"] {
+                    source["exploreUrl"] = "@js: java.ajax('\(base)/explore-kinds?key=\(key)')"
+                }
             }
             return source
         }
