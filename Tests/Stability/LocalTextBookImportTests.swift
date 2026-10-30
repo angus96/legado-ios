@@ -88,12 +88,13 @@ final class LocalTextBookImportTests: XCTestCase {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("章节标题.txt")
-        try "第1章初见\n第一章正文，保留完整内容。\n第2章 难道是你？\n第二章正文\n正文继续，不另起一章。".write(to: file, atomically: true, encoding: .utf8)
+        try "第1章初见\n第一章正文，保留完整内容。\n第一章里提到的旅人，终于抵达。\n第2章 难道是你？\n第二章正文\n正文继续，不另起一章。".write(to: file, atomically: true, encoding: .utf8)
         let parsed = try TxtFileParser.parse(file: file)
         XCTAssertEqual(parsed.chapters.map(\.title), ["第1章初见", "第2章 难道是你？"])
         let first = try TxtFileParser.readChapter(file: file, chapterIndex: 0, metadataTag: parsed.chapters[0].metadataTag)
         let second = try TxtFileParser.readChapter(file: file, chapterIndex: 1, metadataTag: parsed.chapters[1].metadataTag)
         XCTAssertTrue(first.contains("第一章正文，保留完整内容。"))
+        XCTAssertTrue(first.contains("第一章里提到的旅人，终于抵达。"))
         XCTAssertTrue(second.contains("第二章正文"))
         XCTAssertTrue(second.contains("正文继续，不另起一章。"))
     }
