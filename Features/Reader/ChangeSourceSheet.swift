@@ -28,6 +28,7 @@ struct ChangeSourceResult: Identifiable {
 
 @MainActor
 class ChangeSourceViewModel: ObservableObject {
+    typealias SearchOperation = (BookSourceSnapshot, String) async throws -> [SearchBookResult]
     @Published var results: [ChangeSourceResult] = []
     @Published var isSearching = false
     @Published var searchProgress: Double = 0
@@ -36,6 +37,43 @@ class ChangeSourceViewModel: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var searchID = UUID()
     private let ruleEngine = RuleEngine()
+    private let context: NSManagedObjectContext
+    private let searchOperation: SearchOperation
+
+    init(context: NSManagedObjectContext = CoreDataStack.shared.viewContext,
+         searchOperation: @escaping SearchOperation = { try await WebBook.searchBook(source: $0, key: $1, timeout: 12) }) {
+        self.context = context
+        self.searchOperation = searchOperation
+    }
+
+    func removeUnavailableResults() {
+        let request = BookSource.fetchRequest()
+        request.predicate = NSPredicate(format: "enabled == YES")
+        let available = Set(((try? context.fetch(request)) ?? []).map(\.sourceId))
+        results.removeAll { $0.source.isDeleted || $0.source.managedObjectContext == nil || !available.contains($0.source.sourceId) }
+    }
+
+    func useResults(_ candidates: [BookSearchSource], for book: Book) {
+        cancelSearch()
+        let context = book.managedObjectContext ?? CoreDataStack.shared.viewContext
+        results = candidates.compactMap { candidate in
+            let request = BookSource.fetchRequest()
+            request.fetchLimit = 1
+            request.predicate = NSPredicate(format: "sourceId == %@ AND enabled == YES", candidate.sourceId as CVarArg)
+            guard let source = try? context.fetch(request).first else { return nil }
+            return ChangeSourceResult(source: source, latestChapter: candidate.lastChapter ?? "未知", chapterCount: 0,
+                                      bookUrl: candidate.bookUrl, tocUrl: "",
+                                      isCurrentSource: source.sourceId == book.source?.sourceId || source.bookSourceUrl == book.origin)
+        }
+        errorMessage = results.isEmpty ? "本次搜索尚未找到其他书源，可点击重新搜索" : nil
+        searchProgress = 1
+        sortResults()
+    }
+
+    func recordFailure(_ result: ChangeSourceResult, error: Error) {
+        guard let index = results.firstIndex(where: { $0.id == result.id }) else { return }
+        results[index].loadError = NetworkError.message(for: error)
+    }
     
     /// 搜索可用书源
     func searchSources(for book: Book) async {
@@ -57,7 +95,7 @@ class ChangeSourceViewModel: ObservableObject {
         results = []
         errorMessage = nil
         
-        let context = CoreDataStack.shared.viewContext
+        let context = context
         
         // 获取所有启用的书源
         let request: NSFetchRequest<BookSource> = BookSource.fetchRequest()
@@ -80,13 +118,14 @@ class ChangeSourceViewModel: ObservableObject {
             return (source, definition)
         }
         var completedCount = 0
+        let operation = searchOperation
         
         // 搜索与换源共用实际的并发限制。
         await ConcurrentSourceSearch.run(searchInputs, limit: 12) { item -> ChangeSourceResult? in
             let (source, definition) = item
             do {
                 let searchResults = try await ConcurrentSourceSearch.withTimeout(seconds: 12) {
-                    try await WebBook.searchBook(source: definition, key: bookName, timeout: 12)
+                    try await operation(definition, bookName)
                 }
                 let matched = searchResults.first { searchBook in
                     searchBook.name == bookName &&
@@ -172,9 +211,20 @@ struct ChangeSourceSheet: View {
     @StateObject private var viewModel = ChangeSourceViewModel()
     @Binding var isPresented: Bool
     let book: Book
+    let initialSources: [BookSearchSource]?
     let onSourceChanged: () -> Void
     @State private var changeTask: Task<Void, Never>?
     @State private var changeError: String?
+    @State private var failedSource: BookSource?
+    @State private var showingSourceCheck = false
+
+    init(isPresented: Binding<Bool>, book: Book, initialSources: [BookSearchSource]? = nil,
+         onSourceChanged: @escaping () -> Void) {
+        _isPresented = isPresented
+        self.book = book
+        self.initialSources = initialSources
+        self.onSourceChanged = onSourceChanged
+    }
     
     var body: some View {
         NavigationView {
@@ -217,14 +267,18 @@ struct ChangeSourceSheet: View {
                             viewModel.isSearching = false
                         }
                     } else {
-                        Button("重搜") {
+                        Button("重新搜索") {
                             Task { await viewModel.searchSources(for: book) }
                         }
                     }
                 }
             }
             .task {
-                await viewModel.searchSources(for: book)
+                if let initialSources {
+                    viewModel.useResults(initialSources, for: book)
+                } else {
+                    await viewModel.searchSources(for: book)
+                }
             }
             .onDisappear {
                 viewModel.cancelSearch()
@@ -233,8 +287,14 @@ struct ChangeSourceSheet: View {
             .alert("换源失败", isPresented: Binding(
                 get: { changeError != nil }, set: { if !$0 { changeError = nil } }
             )) {
+                Button("校验这个书源") { showingSourceCheck = true }
                 Button("确定", role: .cancel) { changeError = nil }
             } message: { Text(changeError ?? "") }
+            .sheet(isPresented: $showingSourceCheck, onDismiss: { viewModel.removeUnavailableResults() }) {
+                if let source = failedSource {
+                    SourceDiagnosticView(source: source, bookName: book.name, failingBookURL: book.bookUrl)
+                }
+            }
         }
     }
     
@@ -264,7 +324,6 @@ struct ChangeSourceSheet: View {
             ForEach(viewModel.results) { result in
                 SourceResultRow(result: result) {
                     guard changeTask == nil else { return }
-                    viewModel.cancelSearch()
                     changeTask = Task {
                         defer { changeTask = nil }
                         do {
@@ -273,11 +332,14 @@ struct ChangeSourceSheet: View {
                                 for: book
                             )
                             guard !Task.isCancelled else { return }
+                            viewModel.cancelSearch()
                             onSourceChanged()
                             isPresented = false
                         } catch is CancellationError {
                             return
                         } catch {
+                            viewModel.recordFailure(result, error: error)
+                            failedSource = result.source
                             changeError = error.localizedDescription
                         }
                     }
@@ -333,6 +395,9 @@ struct SourceResultRow: View {
                         Text("共 \(result.chapterCount) 章")
                             .font(.caption2)
                             .foregroundColor(.secondary)
+                    }
+                    if let error = result.loadError {
+                        Text(error).font(.caption).foregroundColor(.red).lineLimit(2)
                     }
                 }
                 

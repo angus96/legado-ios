@@ -1,6 +1,7 @@
 import XCTest
 import CoreData
 import UIKit
+import Combine
 @testable import Legado
 
 private actor SearchResponseGate {
@@ -44,6 +45,144 @@ final class ReadingAndSearchTests: XCTestCase {
         book.bookUrl = "https://example.invalid/book"
         book.tocUrl = "https://example.invalid/toc"
         return book
+    }
+
+    func testDiscoveryDefersJavaScriptAndKeepsStaticCategoriesSearchable() async throws {
+        let database = try container()
+        let context = database.viewContext
+        let scripted = BookSource.create(in: context)
+        scripted.bookSourceUrl = "https://scripted.invalid"
+        scripted.bookSourceName = "动态书源"
+        scripted.enabledExplore = true
+        scripted.exploreUrl = "@js: java.ajax('https://scripted.invalid/categories')"
+        let plain = BookSource.create(in: context)
+        plain.bookSourceUrl = "https://plain.invalid"
+        plain.bookSourceName = "普通书源"
+        plain.enabledExplore = true
+        plain.exploreUrl = "奇幻::/fantasy&&历史::/history"
+        try context.save()
+        let scriptedID = scripted.sourceId
+
+        let gate = SearchResponseGate()
+        let started = expectation(description: "只解析选中的书源一次")
+        started.assertForOverFulfill = true
+        let model = DiscoveryViewModel(context: database.newBackgroundContext(), defaults: nil) { source in
+            XCTAssertEqual(source.sourceId, scriptedID)
+            started.fulfill()
+            await gate.wait()
+            return [ExploreKind(title: "动态分类", url: "/dynamic")]
+        }
+        await model.loadExploreGroups()
+        XCTAssertEqual(model.exploreGroups.count, 2)
+        XCTAssertTrue(model.exploreGroups.allSatisfy { !$0.isLoading })
+        XCTAssertNil(model.selectedSourceID)
+        XCTAssertEqual(try XCTUnwrap(model.exploreGroups.first { $0.sourceId == scripted.sourceId }).exploreKinds.count, 0)
+        model.filterGroups(keyword: "历史")
+        XCTAssertEqual(model.filteredGroups.map(\.sourceId), [plain.sourceId])
+        model.filterGroups(keyword: "动态书源")
+
+        let loaded = expectation(description: "动态分类加载完成")
+        let subscription = model.$exploreGroups.first { $0.contains { $0.exploreKinds.first?.title == "动态分类" } }
+            .sink { _ in loaded.fulfill() }
+        model.selectSource(scripted.sourceId)
+        await fulfillment(of: [started], timeout: 3)
+        XCTAssertTrue(try XCTUnwrap(model.filteredGroups.first).isLoading)
+        model.selectSource(scripted.sourceId)
+        model.selectSource(scripted.sourceId)
+        await gate.release()
+        await fulfillment(of: [loaded], timeout: 3)
+        XCTAssertEqual(model.filteredGroups.map(\.sourceId), [scripted.sourceId])
+        XCTAssertFalse(try XCTUnwrap(model.filteredGroups.first).isLoading)
+        model.selectSource(scripted.sourceId)
+        model.selectSource(scripted.sourceId)
+        XCTAssertEqual(model.filteredGroups.first?.exploreKinds.first?.url, "/dynamic")
+        withExtendedLifetime(subscription) {}
+    }
+
+    func testDiscoveryCanRetryFailedCategories() async throws {
+        let database = try container()
+        let source = BookSource.create(in: database.viewContext)
+        source.bookSourceUrl = "https://example.invalid"
+        source.bookSourceName = "重试书源"
+        source.enabledExplore = true
+        source.exploreUrl = "@js: missingFunction()"
+        try database.viewContext.save()
+        var attempts = 0
+        let model = DiscoveryViewModel(context: database.newBackgroundContext(), defaults: nil) { _ in
+            attempts += 1
+            if attempts == 1 { throw ExploreRuleParser.ParseError.invalidJavaScript }
+            return [ExploreKind(title: "重试成功", url: "/retry")]
+        }
+        await model.loadExploreGroups()
+        let failed = expectation(description: "显示分类加载失败")
+        let failureSubscription = model.$exploreGroups.first { $0.first?.errorMessage != nil }
+            .sink { _ in failed.fulfill() }
+        model.selectSource(source.sourceId)
+        await fulfillment(of: [failed], timeout: 3)
+        XCTAssertFalse(try XCTUnwrap(model.exploreGroups.first).isLoading)
+        let loaded = expectation(description: "重试后显示分类")
+        let successSubscription = model.$exploreGroups.first { $0.first?.exploreKinds.first?.title == "重试成功" }
+            .sink { _ in loaded.fulfill() }
+        model.retryGroup(source.sourceId)
+        await fulfillment(of: [loaded], timeout: 3)
+        XCTAssertNil(model.exploreGroups.first?.errorMessage)
+        XCTAssertEqual(attempts, 2)
+        withExtendedLifetime((failureSubscription, successSubscription)) {}
+    }
+
+    func testDiscoveryRefreshIgnoresCategoriesFromAnOlderLoad() async throws {
+        let database = try container()
+        let source = BookSource.create(in: database.viewContext)
+        source.bookSourceUrl = "https://example.invalid"
+        source.bookSourceName = "刷新书源"
+        source.enabledExplore = true
+        source.exploreUrl = "@js: '旧分类::/old'"
+        try database.viewContext.save()
+        let gate = SearchResponseGate()
+        let started = expectation(description: "旧分类正在加载")
+        let finished = expectation(description: "旧请求已返回")
+        let model = DiscoveryViewModel(context: database.newBackgroundContext(), defaults: nil) { _ in
+            started.fulfill()
+            await gate.wait()
+            finished.fulfill()
+            return [ExploreKind(title: "旧分类", url: "/old")]
+        }
+        await model.loadExploreGroups()
+        model.selectSource(source.sourceId)
+        await fulfillment(of: [started], timeout: 3)
+        source.exploreUrl = "新分类::/new"
+        try database.viewContext.save()
+        model.filterGroups(keyword: "刷新")
+        await model.refresh()
+        await gate.release()
+        await fulfillment(of: [finished], timeout: 3)
+        await Task.yield()
+        XCTAssertEqual(model.filteredGroups.first?.exploreKinds.map(\.title), ["新分类"])
+        XCTAssertFalse(try XCTUnwrap(model.filteredGroups.first).isLoading)
+    }
+
+    func testDiscoveryParsesScriptValuesAndReportsScriptErrors() async throws {
+        let database = try container()
+        let source = BookSource.create(in: database.viewContext)
+        source.bookSourceUrl = "https://example.invalid"
+        source.bookSourceName = "分类解析书源"
+        source.variable = "{\"category\":\"推荐\"}"
+        source.exploreUrl = "<js>[{title: category, url: '/first'}, {title: category, url: '/second'}]</js>"
+        let kinds = try await ExploreRuleParser.parse(BookSourceSnapshot.capture(source))
+        XCTAssertEqual(kinds.map(\.title), ["推荐", "推荐"])
+        XCTAssertEqual(kinds.map(\.url), ["/first", "/second"])
+        XCTAssertEqual(Set(kinds.map(\.id)).count, 2, "同名分类仍需分别显示")
+        source.exploreUrl = "@js: ({'排行': '/ranking'})"
+        let dictionaryKinds = try await ExploreRuleParser.parse(BookSourceSnapshot.capture(source))
+        XCTAssertEqual(dictionaryKinds.first?.title, "排行")
+        XCTAssertEqual(dictionaryKinds.first?.url, "/ranking")
+        source.exploreUrl = "@js: throw new Error('broken rule')"
+        do {
+            _ = try await ExploreRuleParser.parse(BookSourceSnapshot.capture(source))
+            XCTFail("脚本异常不能显示为成功加载的空分类")
+        } catch ExploreRuleParser.ParseError.invalidJavaScript {
+            // 页面据此显示失败并允许重试。
+        }
     }
 
     func testChapterDirectoryUsesCompleteListAndKeepsIntroductions() async throws {
@@ -108,6 +247,117 @@ final class ReadingAndSearchTests: XCTestCase {
         let identifiers = chapters.map(\.chapterId)
         try await ChapterDirectoryUpdater.repairStoredDirectory(for: book)
         XCTAssertEqual(try context.fetch(BookChapter.fetchRequest(byBookId: book.bookId)).map(\.chapterId), identifiers)
+    }
+
+    func testExactTitleSearchKeepsTheWholeKeywordAndSelectedSources() async throws {
+        let database = try container()
+        let sources = (0..<3).map { index -> BookSource in
+            let source = BookSource.create(in: database.viewContext)
+            source.bookSourceName = "精确搜索书源\(index)"
+            source.bookSourceUrl = "https://example.invalid/\(index)"
+            source.searchUrl = "/search"
+            return source
+        }
+        try database.viewContext.save()
+        let selectedID = sources[1].sourceId
+        let model = SearchViewModel(context: database.viewContext, selectionDefaults: nil) { source, keyword in
+            XCTAssertEqual(source.sourceId, selectedID, "不能扩大用户选择的书源范围")
+            XCTAssertEqual(keyword, "我在大明")
+            return [
+                SearchBookResult(name: "我在大明当先生", author: "甲", bookUrl: "/1"),
+                SearchBookResult(name: "全集：我在大明当先生", author: "乙", bookUrl: "/2"),
+                SearchBookResult(name: "大明：我在朝堂", author: "我在大明", bookUrl: "/3")
+            ]
+        }
+        model.searchMode = .title
+        await model.search(keyword: " 我在大明 ", sources: [sources[1]])
+        XCTAssertEqual(model.searchResults.map(\.name), ["我在大明当先生", "全集：我在大明当先生"])
+        XCTAssertTrue(model.searchResults.allSatisfy { $0.availableSources.map(\.sourceId) == [selectedID] })
+        model.searchText = "尚未提交的新书名"
+        model.searchMode = .all
+        XCTAssertEqual(model.searchResults.count, 3)
+        model.searchMode = .title
+        XCTAssertEqual(model.searchResults.count, 2, "切换方式仍使用已提交的完整关键词")
+    }
+
+    func testChangeSourceStartsWithTheMatchedSourcesWithoutSearching() throws {
+        let database = try container()
+        let source = BookSource.create(in: database.viewContext)
+        source.bookSourceName = "已选书源"
+        source.bookSourceUrl = "https://selected.invalid"
+        source.searchUrl = "/search"
+        let book = makeBook(in: database.viewContext)
+        try database.viewContext.save()
+        let model = ChangeSourceViewModel(context: database.viewContext) { _, _ in
+            XCTFail("展示已找到的书源不能重新搜索")
+            return []
+        }
+        let result = BookSearchResult(name: book.name, author: book.author, sourceName: source.bookSourceName,
+                                      sourceId: source.sourceId, bookUrl: source.bookSourceUrl + "/found")
+        model.useResults(result.availableSources, for: book)
+        XCTAssertEqual(model.results.count, 1)
+        XCTAssertEqual(model.results.first?.bookUrl, result.bookUrl)
+        XCTAssertFalse(model.isSearching)
+    }
+
+    func testFailedSourceSelectionKeepsTheRemainingSearchRunning() async throws {
+        let database = try container()
+        let book = makeBook(in: database.viewContext)
+        let sources = (0..<2).map { index -> BookSource in
+            let source = BookSource.create(in: database.viewContext)
+            source.bookSourceName = "换源测试\(index)"
+            source.bookSourceUrl = "https://example.invalid/\(index)"
+            source.searchUrl = "/search"
+            return source
+        }
+        try database.viewContext.save()
+        let firstID = sources[0].sourceId
+        let gate = SearchResponseGate()
+        let model = ChangeSourceViewModel(context: database.viewContext) { source, _ in
+            if source.sourceId != firstID { await gate.wait() }
+            return [SearchBookResult(name: "测试书籍", author: "测试作者", bookUrl: source.bookSourceUrl + "/book")]
+        }
+        let firstResult = expectation(description: "先收到一个书源")
+        let subscription = model.$results.first { !$0.isEmpty }.sink { _ in firstResult.fulfill() }
+        let task = Task { await model.searchSources(for: book) }
+        await fulfillment(of: [firstResult], timeout: 3)
+        let result = try XCTUnwrap(model.results.first)
+        do {
+            try await model.changeSource(result: result, for: book)
+            XCTFail("缺少目录规则的书源应换源失败")
+        } catch {
+            model.recordFailure(result, error: error)
+        }
+        XCTAssertTrue(model.isSearching)
+        XCTAssertNotNil(model.results.first?.loadError)
+        await gate.release()
+        await task.value
+        XCTAssertEqual(model.results.count, 2)
+        XCTAssertEqual(model.searchProgress, 1)
+        XCTAssertEqual(book.origin, "https://example.invalid", "失败不能改动原书源")
+        withExtendedLifetime(subscription) {}
+    }
+
+    func testSourceHealthDistinguishesOneBookFromMultipleFailuresAndNetworkUncertainty() async throws {
+        let database = try container()
+        let source = BookSource.create(in: database.viewContext)
+        source.bookSourceName = "校验书源"
+        source.bookSourceUrl = "https://example.invalid"
+        source.searchUrl = "/search"
+        source.setSearchRule(.init(bookList: "$.books", name: "$.name", author: "$.author", bookUrl: "$.url"))
+        source.setTocRule(TocRule(bookList: "$.chapters", chapterName: "$.name", chapterUrl: "$.url"))
+        let definition = try BookSourceSnapshot.capture(source)
+        let search: SourceHealthChecker.Search = { _, _ in
+            [SearchBookResult(name: "其他书甲", bookUrl: "/a"), SearchBookResult(name: "其他书乙", bookUrl: "/b")]
+        }
+        let good = try await SourceHealthChecker.check(source: definition, bookName: "当前书", failingBookURL: "/broken", search: search) { _, _ in 10 }
+        XCTAssertEqual(good.outcome, .otherBooksWork)
+        let bad = try await SourceHealthChecker.check(source: definition, bookName: "当前书", failingBookURL: "/broken", search: search) { _, _ in 0 }
+        XCTAssertEqual(bad.outcome, .sourceIssue)
+        XCTAssertEqual(bad.samples.count, 2)
+        let unknown = try await SourceHealthChecker.check(source: definition, bookName: "当前书", failingBookURL: "/broken", search: search) { _, _ in throw URLError(.timedOut) }
+        XCTAssertEqual(unknown.outcome, .inconclusive, "超时不能当作整个书源失效")
+        XCTAssertTrue(source.enabled, "校验本身不能停用或删除书源")
     }
 
     func testAuthorSearchFiltersByAuthorAndPreservesMergedSources() async throws {
@@ -236,11 +486,15 @@ final class ReadingAndSearchTests: XCTestCase {
             BookSearchResult(name: "同一本书", author: "作者", sourceName: "备用源", sourceId: second, bookUrl: "https://second.invalid/book")
         ])
         let rowID = try XCTUnwrap(accumulator.results.first?.id)
+        XCTAssertEqual(accumulator.results.first?.availableSources.map(\.sourceId), [first, second])
+        let alternate = try XCTUnwrap(accumulator.results.first?.availableSources.last)
+        XCTAssertEqual(accumulator.results.first?.using(alternate).bookUrl, "https://second.invalid/book")
         accumulator.retainSources([second])
         XCTAssertEqual(accumulator.results.first?.id, rowID)
         XCTAssertEqual(accumulator.results.first?.sourceCount, 1)
         XCTAssertEqual(accumulator.results.first?.sourceName, "备用源")
         XCTAssertEqual(accumulator.results.first?.bookUrl, "https://second.invalid/book")
+        XCTAssertEqual(accumulator.results.first?.availableSources.map(\.sourceId), [second])
         accumulator.retainSources([])
         XCTAssertTrue(accumulator.results.isEmpty)
     }

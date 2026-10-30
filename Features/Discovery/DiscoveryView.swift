@@ -4,231 +4,159 @@ import JavaScriptCore
 
 struct DiscoveryView: View {
     @StateObject private var viewModel = DiscoveryViewModel()
-    @State private var searchText = ""
-    @FocusState private var searchFocused: Bool
+    @StateObject private var books = DiscoveryBookWallViewModel()
+    @State private var showingSources = false
+    @State private var showingSearch = false
+    @State private var showingSourceManage = false
+    @State private var showingSourceCheck = false
+    @State private var diagnosticSource: BookSource?
+    @State private var selectedBook: BookSearchResult?
+    @State private var showingBookDetail = false
     
     var body: some View {
         VStack(spacing: 0) {
-            searchBar
-            
-            if viewModel.exploreGroups.isEmpty && !viewModel.isLoading {
-                emptyView
+            header
+            if let group = viewModel.selectedGroup {
+                categories(group)
+                if group.isLoading {
+                    ProgressView("正在加载分类…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let selection = viewModel.selectedExplore {
+                    DiscoveryBookWall(model: books, selection: selection, onSelect: { result in
+                        selectedBook = result
+                        showingBookDetail = true
+                    }, onChangeSource: { showingSources = true }, onCheckSource: checkSource)
+                    .id(selection.cacheKey)
+                } else {
+                    VStack(spacing: 16) {
+                        Image(systemName: "square.grid.2x2").font(.system(size: 36)).foregroundStyle(.secondary)
+                        Text(group.errorMessage ?? "这个书源暂无发现分类").multilineTextAlignment(.center)
+                        HStack {
+                            Button("重试") { viewModel.retryGroup(group.sourceId) }.buttonStyle(.bordered)
+                            Button("换个书源") { showingSources = true }.buttonStyle(.bordered)
+                            Button("校验书源", action: checkSource).buttonStyle(.bordered)
+                        }
+                    }
+                    .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else if viewModel.isLoading {
+                ProgressView("正在读取书源…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                exploreList
+                VStack(spacing: 16) {
+                    Image(systemName: "books.vertical").font(.system(size: 44)).foregroundStyle(.secondary)
+                    Text("暂无发现内容").font(.headline)
+                    Text("请先添加并启用支持发现功能的书源").font(.footnote).foregroundStyle(.secondary)
+                    Button("管理书源") { showingSourceManage = true }.buttonStyle(.borderedProminent)
+                }
+                .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .background(Color(.systemGroupedBackground))
         .navigationTitle("发现")
         .navigationBarTitleDisplayMode(.inline)
-        .onDisappear { searchFocused = false }
-        .task { await viewModel.loadExploreGroups() }
-        .refreshable { await viewModel.refresh() }
-        .sheet(item: $viewModel.selectedExplore) { selection in
-            NavigationStack {
-                ExploreResultsView(selection: selection)
+        .toolbar(.hidden, for: .navigationBar)
+        .task {
+            await viewModel.loadExploreGroups()
+            viewModel.restoreSelection()
+        }
+        .task(id: viewModel.selectedExplore?.cacheKey) {
+            if let selection = viewModel.selectedExplore { await books.show(selection) }
+            else { books.clear() }
+        }
+        .onDisappear { viewModel.cancelLoading(); books.cancelLoading() }
+        .sheet(isPresented: $showingSources) { DiscoverySourcePicker(model: viewModel) }
+        .sheet(isPresented: $showingSearch) { SearchView() }
+        .sheet(isPresented: $showingSourceManage, onDismiss: { Task { await viewModel.refresh() } }) {
+            NavigationStack { SourceManageView() }
+        }
+        .sheet(isPresented: $showingSourceCheck, onDismiss: { Task { await viewModel.refresh() } }) {
+            if let source = diagnosticSource, !source.isDeleted {
+                SourceDiagnosticView(source: source, bookName: "", failingBookURL: "")
             }
         }
-    }
-    
-    private var searchBar: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "magnifyingglass")
-                .foregroundColor(.secondary)
-            
-            TextField("搜索书源", text: $searchText)
-                .textFieldStyle(.plain)
-                .focused($searchFocused)
-                .submitLabel(.done)
-                .onSubmit { searchFocused = false }
-                .accessibilityIdentifier("discovery.search")
-                .onChange(of: searchText) { _ in
-                    viewModel.filterGroups(keyword: searchText)
-                }
-            
-            if !searchText.isEmpty {
-                Button(action: { searchText = "" }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-                .accessibilityLabel("清空搜索")
-            }
-            if searchFocused {
-                Button("完成") { searchFocused = false }
-                    .accessibilityIdentifier("discovery.dismissKeyboard")
+        .navigationDestination(isPresented: $showingBookDetail) {
+            if let book = selectedBook {
+                BookDetailView(result: book).id(book.id).toolbar(.visible, for: .navigationBar)
             }
         }
-        .padding(10)
-        .background(Color(.systemGray6))
-        .cornerRadius(10)
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-    }
-    
-    private var emptyView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "books.vertical")
-                .font(.system(size: 50))
-                .foregroundColor(.secondary.opacity(0.5))
-            
-            Text("暂无发现内容")
-                .font(.headline)
-                .foregroundColor(.secondary)
-            
-            Text("请确保已添加支持发现功能的书源")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
+        .alert("加载失败", isPresented: Binding(
+            get: { viewModel.errorMessage != nil },
+            set: { if !$0 { viewModel.errorMessage = nil } }
+        )) {
+            Button("确定", role: .cancel) { viewModel.errorMessage = nil }
+        } message: {
+            Text(viewModel.errorMessage ?? "")
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
-        .onTapGesture { searchFocused = false }
     }
-    
-    private var exploreList: some View {
-        List {
-            ForEach(viewModel.filteredGroups, id: \.sourceId) { group in
-                ExploreGroupRow(group: group) {
-                    searchFocused = false
-                    viewModel.toggleGroup(group.sourceId)
-                }
-                
-                if viewModel.isExpanded(group.sourceId) {
-                    ExploreKindFlexBox(group: group, kinds: group.exploreKinds) { kind in
-                        searchFocused = false
-                        viewModel.openExplore(group: group, kind: kind)
-                    }
-                    .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 8, trailing: 8))
-                    .listRowSeparator(.hidden)
-                }
-            }
-        }
-        .listStyle(.plain)
-        .scrollDismissesKeyboard(.interactively)
-    }
-}
 
-struct ExploreGroupRow: View {
-    let group: ExploreGroup
-    let onTap: () -> Void
-    
-    var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 8) {
-                Text(group.sourceName)
-                    .font(.system(size: 16))
-                    .foregroundColor(.primary)
-                
-                Spacer()
-                
-                if group.isLoading {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                } else {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                        .rotationEffect(.degrees(group.isExpanded ? 90 : 0))
+    private var header: some View {
+        HStack(spacing: 14) {
+                Text("发现").font(.title2.weight(.bold))
+                Spacer(minLength: 4)
+                Button { showingSources = true } label: {
+                    HStack(spacing: 5) {
+                        Text(viewModel.selectedGroup?.sourceName ?? "选择书源").lineLimit(1)
+                        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                    }
+                    .font(.subheadline.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 7)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
+                    .frame(maxWidth: 175)
                 }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityLabel("当前书源：" + (viewModel.selectedGroup?.sourceName ?? "选择书源"))
+                .accessibilityIdentifier("discovery.sourcePicker")
+                Button { showingSearch = true } label: { Image(systemName: "magnifyingglass") }
+                    .frame(minWidth: 32, minHeight: 44).accessibilityLabel("搜书")
+                Menu {
+                    Button("刷新分类") { Task { await viewModel.refresh() } }
+                    Button("校验当前书源", action: checkSource).disabled(viewModel.selectedGroup == nil)
+                    Button("管理书源") { showingSourceManage = true }
+                } label: { Image(systemName: "ellipsis.circle").frame(minWidth: 32, minHeight: 44) }
+                .accessibilityLabel("发现页操作")
         }
         .buttonStyle(.plain)
-        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+        .padding(.horizontal, 18).padding(.vertical, 6)
+        .background(Color(.systemBackground))
     }
-}
-
-struct ExploreKindFlexBox: View {
-    let group: ExploreGroup
-    let kinds: [ExploreKind]
-    let onKindTap: (ExploreKind) -> Void
     
-    var body: some View {
-        FlowLayout(spacing: 8) {
-            ForEach(kinds, id: \.title) { kind in
-                ExploreKindChip(title: kind.title) {
-                    onKindTap(kind)
-                }
+    private func categories(_ group: ExploreGroup) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 22) {
+                    ForEach(group.exploreKinds) { kind in
+                        let selected = viewModel.selectedExplore?.url == kind.url
+                        Button { viewModel.openExplore(group: group, kind: kind) } label: {
+                            VStack(spacing: 10) {
+                                Text(kind.title).font(.subheadline.weight(selected ? .semibold : .regular)).lineLimit(1)
+                                Capsule().fill(selected ? Color.accentColor : .clear).frame(height: 3)
+                            }
+                            .fixedSize(horizontal: true, vertical: false).padding(.top, 13)
+                            .foregroundColor(selected ? .accentColor : .primary)
+                        }
+                        .buttonStyle(.plain)
+                        .id(kind.url)
+                        .accessibilityValue(selected ? "已选择" : "")
+                        .accessibilityIdentifier("discovery.category." + kind.title)
+                    }
+                }.padding(.horizontal, 18)
+            }
+            .onChange(of: viewModel.selectedExplore?.cacheKey) { _ in
+                if let url = viewModel.selectedExplore?.url { proxy.scrollTo(url, anchor: .center) }
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
+        .background(Color(.systemBackground))
+        .overlay(alignment: .bottom) { Divider() }
     }
-}
 
-struct ExploreKindChip: View {
-    let title: String
-    let action: () -> Void
-    @State private var isPressed = false
-    
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 14))
-                .foregroundColor(.primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color(.systemGray6))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(Color.gray.opacity(0.2), lineWidth: 1)
-                )
-                .scaleEffect(isPressed ? 0.92 : 1.0)
-                .animation(.easeOut(duration: 0.12), value: isPressed)
-        }
-        .buttonStyle(PlainButtonStyle())
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
-    }
-}
-
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 8
-    
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let result = FlowResult(in: proposal.width ?? 0, subviews: subviews, spacing: spacing)
-        return result.size
-    }
-    
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = FlowResult(in: bounds.width, subviews: subviews, spacing: spacing)
-        for (index, subview) in subviews.enumerated() {
-            subview.place(at: CGPoint(x: bounds.minX + result.positions[index].x,
-                                      y: bounds.minY + result.positions[index].y),
-                         proposal: .unspecified)
-        }
-    }
-    
-    struct FlowResult {
-        var size: CGSize = .zero
-        var positions: [CGPoint] = []
-        
-        init(in maxWidth: CGFloat, subviews: Subviews, spacing: CGFloat) {
-            var x: CGFloat = 0
-            var y: CGFloat = 0
-            var rowHeight: CGFloat = 0
-            
-            for subview in subviews {
-                let size = subview.sizeThatFits(.unspecified)
-                
-                if x + size.width > maxWidth && x > 0 {
-                    x = 0
-                    y += rowHeight + spacing
-                    rowHeight = 0
-                }
-                
-                positions.append(CGPoint(x: x, y: y))
-                rowHeight = max(rowHeight, size.height)
-                x += size.width + spacing
-            }
-            
-            self.size = CGSize(width: maxWidth, height: y + rowHeight)
+    private func checkSource() {
+        guard let id = viewModel.selectedSourceID else { return }
+        let request = BookSource.fetchRequest()
+        request.fetchLimit = 1
+        request.predicate = NSPredicate(format: "sourceId == %@", id as CVarArg)
+        do {
+            diagnosticSource = try CoreDataStack.shared.viewContext.fetch(request).first
+            showingSourceCheck = diagnosticSource != nil
+        } catch {
+            viewModel.errorMessage = error.localizedDescription
         }
     }
 }
@@ -240,12 +168,14 @@ struct ExploreKind: Identifiable {
 }
 
 struct ExploreGroup: Identifiable {
-    let id = UUID()
+    var id: UUID { sourceId }
     let sourceId: UUID
     let sourceName: String
+    var sourceGroup: String? = nil
     var exploreKinds: [ExploreKind] = []
     var isLoading = false
-    var isExpanded = false
+    var hasLoadedKinds = false
+    var errorMessage: String?
 }
 
 struct ExploreSelection: Identifiable, Hashable {
@@ -254,46 +184,118 @@ struct ExploreSelection: Identifiable, Hashable {
     let sourceName: String
     let kindTitle: String
     let url: String
+
+    var cacheKey: String { sourceId.uuidString + "|" + url }
 }
 
 @MainActor
 class DiscoveryViewModel: ObservableObject {
+    typealias ExploreOperation = (BookSourceSnapshot) async throws -> [ExploreKind]
+
     @Published var exploreGroups: [ExploreGroup] = []
     @Published var filteredGroups: [ExploreGroup] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var selectedExplore: ExploreSelection?
+    @Published private(set) var selectedSourceID: UUID?
     
-    private var expandedGroups: Set<UUID> = []
+    private let context: NSManagedObjectContext
+    private let operation: ExploreOperation
+    private let defaults: UserDefaults?
+    private var groupTasks: [UUID: Task<Void, Never>] = [:]
+    private var loadID = UUID()
     private var currentKeyword: String = ""
+
+    init(context: NSManagedObjectContext = CoreDataStack.shared.newBackgroundContext(), defaults: UserDefaults? = .standard,
+         operation: @escaping ExploreOperation = { try await ExploreRuleParser.parse($0) }) {
+        self.context = context
+        self.defaults = defaults
+        self.operation = operation
+    }
+
+    var selectedGroup: ExploreGroup? { exploreGroups.first { $0.sourceId == selectedSourceID } }
+
+    func restoreSelection() {
+        let savedID = selectedSourceID ?? defaults?.string(forKey: "discovery.selectedSourceID").flatMap(UUID.init(uuidString:))
+        let group = exploreGroups.first { $0.sourceId == savedID }
+            ?? exploreGroups.first { $0.hasLoadedKinds && !$0.exploreKinds.isEmpty }
+            ?? exploreGroups.first
+        guard let group else {
+            selectedSourceID = nil
+            selectedExplore = nil
+            return
+        }
+        selectSource(group.sourceId)
+    }
+
+    func selectSource(_ sourceID: UUID) {
+        guard let group = exploreGroups.first(where: { $0.sourceId == sourceID }) else { return }
+        if selectedSourceID != sourceID { selectedExplore = nil }
+        selectedSourceID = sourceID
+        defaults?.set(sourceID.uuidString, forKey: "discovery.selectedSourceID")
+        if group.hasLoadedKinds { selectRememberedKind(in: group) }
+        else { loadKinds(sourceID) }
+    }
+
+    private func selectRememberedKind(in group: ExploreGroup) {
+        let savedURL = (defaults?.dictionary(forKey: "discovery.selectedCategories") as? [String: String])?[group.sourceId.uuidString]
+        guard let kind = group.exploreKinds.first(where: { $0.url == savedURL }) ?? group.exploreKinds.first else {
+            selectedExplore = nil
+            return
+        }
+        openExplore(group: group, kind: kind)
+    }
+
+    func cancelLoading() {
+        loadID = UUID()
+        groupTasks.values.forEach { $0.cancel() }
+        groupTasks.removeAll()
+        isLoading = false
+        for index in exploreGroups.indices { exploreGroups[index].isLoading = false }
+        filterGroups(keyword: currentKeyword)
+    }
     
     func loadExploreGroups() async {
+        cancelLoading()
+        let requestID = loadID
         isLoading = true
-        
-        let context = CoreDataStack.shared.viewContext
-        let request = BookSource.fetchRequest()
-        request.predicate = NSPredicate(format: "enabled == YES AND enabledExplore == YES")
-        request.sortDescriptors = [NSSortDescriptor(key: "bookSourceName", ascending: true)]
-        
-        if let sources = try? context.fetch(request) {
-            var groups: [ExploreGroup] = []
-            for source in sources {
-                var group = ExploreGroup(sourceId: source.sourceId, sourceName: source.bookSourceName)
-                
-                if let exploreUrl = source.exploreUrl, !exploreUrl.isEmpty {
-                    group.exploreKinds = await parseExploreUrl(exploreUrl, source: source)
+        errorMessage = nil
+        defer { if loadID == requestID { isLoading = false } }
+
+        do {
+            let context = context
+            // 只读取列表所需的字段。发现脚本可能同步请求网络，不能在这里执行。
+            let groups = try await context.perform {
+                let request = NSFetchRequest<NSDictionary>(entityName: "BookSource")
+                request.resultType = .dictionaryResultType
+                request.propertiesToFetch = ["sourceId", "bookSourceName", "bookSourceGroup", "exploreUrl"]
+                request.predicate = NSPredicate(format: "enabled == YES AND enabledExplore == YES AND exploreUrl != nil AND exploreUrl != ''")
+                request.sortDescriptors = [NSSortDescriptor(key: "bookSourceName", ascending: true)]
+                return try context.fetch(request).compactMap { values -> ExploreGroup? in
+                    guard let id = values["sourceId"] as? UUID,
+                          let name = values["bookSourceName"] as? String else { return nil }
+                    var group = ExploreGroup(sourceId: id, sourceName: name)
+                    group.sourceGroup = values["bookSourceGroup"] as? String
+                    let rule = values["exploreUrl"] as? String ?? ""
+                    if ExploreRuleParser.javaScript(in: rule) == nil {
+                        group.exploreKinds = ExploreRuleParser.parseKinds(rule)
+                        group.hasLoadedKinds = true
+                    }
+                    return group
                 }
-                groups.append(group)
             }
+            guard loadID == requestID, !Task.isCancelled else { return }
             exploreGroups = groups
-            filteredGroups = exploreGroups
+            filterGroups(keyword: currentKeyword)
+        } catch {
+            guard loadID == requestID, !Task.isCancelled else { return }
+            errorMessage = "无法读取发现书源：\(error.localizedDescription)"
         }
-        
-        isLoading = false
     }
     
     func refresh() async {
         await loadExploreGroups()
+        restoreSelection()
     }
     
     func filterGroups(keyword: String) {
@@ -308,19 +310,62 @@ class DiscoveryViewModel: ObservableObject {
         }
     }
     
-    func toggleGroup(_ sourceId: UUID) {
-        if let index = exploreGroups.firstIndex(where: { $0.sourceId == sourceId }) {
-            exploreGroups[index].isExpanded.toggle()
-            expandedGroups.insert(sourceId)
-            filterGroups(keyword: currentKeyword)
+    func retryGroup(_ sourceId: UUID) {
+        loadKinds(sourceId)
+    }
+
+    private func loadKinds(_ sourceId: UUID) {
+        guard groupTasks[sourceId] == nil,
+              let index = exploreGroups.firstIndex(where: { $0.sourceId == sourceId }) else { return }
+        exploreGroups[index].isLoading = true
+        exploreGroups[index].errorMessage = nil
+        filterGroups(keyword: currentKeyword)
+
+        let requestID = loadID
+        let context = context
+        let operation = operation
+        groupTasks[sourceId] = Task { [weak self] in
+            do {
+                let source = try await context.perform {
+                    let request = BookSource.fetchRequest()
+                    request.fetchLimit = 1
+                    request.shouldRefreshRefetchedObjects = true
+                    request.predicate = NSPredicate(format: "sourceId == %@ AND enabled == YES AND enabledExplore == YES", sourceId as CVarArg)
+                    guard let source = try context.fetch(request).first else {
+                        throw ExploreRuleParser.ParseError.sourceUnavailable
+                    }
+                    return try BookSourceSnapshot.capture(source)
+                }
+                try Task.checkCancellation()
+                let kinds = try await operation(source)
+                guard let self, self.loadID == requestID, !Task.isCancelled,
+                      let index = self.exploreGroups.firstIndex(where: { $0.sourceId == sourceId }) else { return }
+                self.exploreGroups[index].exploreKinds = kinds
+                self.exploreGroups[index].hasLoadedKinds = true
+                self.finishLoading(sourceId, index: index)
+            } catch {
+                guard let self, self.loadID == requestID, !Task.isCancelled,
+                      let index = self.exploreGroups.firstIndex(where: { $0.sourceId == sourceId }) else { return }
+                self.exploreGroups[index].errorMessage = error.localizedDescription
+                self.finishLoading(sourceId, index: index)
+            }
         }
     }
-    
-    func isExpanded(_ sourceId: UUID) -> Bool {
-        exploreGroups.first { $0.sourceId == sourceId }?.isExpanded ?? false
+
+    private func finishLoading(_ sourceId: UUID, index: Int) {
+        exploreGroups[index].isLoading = false
+        groupTasks[sourceId] = nil
+        filterGroups(keyword: currentKeyword)
+        if selectedSourceID == sourceId { selectRememberedKind(in: exploreGroups[index]) }
     }
     
     func openExplore(group: ExploreGroup, kind: ExploreKind) {
+        selectedSourceID = group.sourceId
+        if selectedExplore?.sourceId == group.sourceId && selectedExplore?.url == kind.url { return }
+        defaults?.set(group.sourceId.uuidString, forKey: "discovery.selectedSourceID")
+        var categories = defaults?.dictionary(forKey: "discovery.selectedCategories") as? [String: String] ?? [:]
+        categories[group.sourceId.uuidString] = kind.url
+        defaults?.set(categories, forKey: "discovery.selectedCategories")
         selectedExplore = ExploreSelection(
             sourceId: group.sourceId,
             sourceName: group.sourceName,
@@ -329,9 +374,35 @@ class DiscoveryViewModel: ObservableObject {
         )
     }
     
-    private func parseExploreUrl(_ exploreUrl: String, source: BookSource) async -> [ExploreKind] {
-        let resolvedRule = resolveExploreRule(exploreUrl, source: source)
-        let trimmed = resolvedRule.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+enum ExploreRuleParser {
+    enum ParseError: LocalizedError {
+        case sourceUnavailable
+        case invalidJavaScript
+
+        var errorDescription: String? {
+            switch self {
+            case .sourceUnavailable: return "书源已停用或删除"
+            case .invalidJavaScript: return "发现分类脚本执行失败，请检查书源规则"
+            }
+        }
+    }
+
+    static func parse(_ source: BookSourceSnapshot) async throws -> [ExploreKind] {
+        // 显式离开主线程；脚本里的 java.ajax 等同步调用只阻塞本次分类加载。
+        let task = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let rule = source.exploreUrl ?? ""
+            let resolved = try javaScript(in: rule).map { try evaluateJavaScript($0, source: source) } ?? rule
+            try Task.checkCancellation()
+            return parseKinds(resolved)
+        }
+        return try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+    }
+
+    static func parseKinds(_ rule: String) -> [ExploreKind] {
+        let trimmed = rule.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
         if let data = trimmed.data(using: .utf8),
@@ -386,24 +457,24 @@ class DiscoveryViewModel: ObservableObject {
             }
     }
 
-    private func resolveExploreRule(_ exploreUrl: String, source: BookSource) -> String {
+    static func javaScript(in exploreUrl: String) -> String? {
         let trimmed = exploreUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.lowercased().hasPrefix("@js:") {
-            return evaluateExploreJavaScript(String(trimmed.dropFirst(4)), source: source) ?? ""
+            return String(trimmed.dropFirst(4))
         }
 
         if trimmed.lowercased().hasPrefix("<js>") && trimmed.lowercased().hasSuffix("</js>") {
             let start = trimmed.index(trimmed.startIndex, offsetBy: 4)
             let end = trimmed.index(trimmed.endIndex, offsetBy: -5)
-            return evaluateExploreJavaScript(String(trimmed[start..<end]), source: source) ?? ""
+            return String(trimmed[start..<end])
         }
 
-        return exploreUrl
+        return nil
     }
 
-    private func evaluateExploreJavaScript(_ script: String, source: BookSource) -> String? {
+    private static func evaluateJavaScript(_ script: String, source: BookSourceSnapshot) throws -> String {
         let context = ExecutionContext()
-        context.source = try? BookSourceSnapshot.capture(source)
+        context.source = source
         context.baseURL = URL(string: source.bookSourceUrl)
 
         if let variable = source.variable,
@@ -414,18 +485,18 @@ class DiscoveryViewModel: ObservableObject {
             }
         }
 
-        guard let value = context.jsContext.evaluateScript(script) else {
-            return nil
+        guard let value = context.jsContext.evaluateScript(script), context.jsContext.exception == nil else {
+            throw ParseError.invalidJavaScript
         }
 
-        if let array = value.toArray(),
+        if value.isArray, let array = value.toArray(),
            JSONSerialization.isValidJSONObject(array),
            let data = try? JSONSerialization.data(withJSONObject: array),
            let string = String(data: data, encoding: .utf8) {
             return string
         }
 
-        if let dict = value.toDictionary(),
+        if value.isObject, !value.isArray, let dict = value.toDictionary(),
            JSONSerialization.isValidJSONObject(dict),
            let data = try? JSONSerialization.data(withJSONObject: dict),
            let string = String(data: data, encoding: .utf8) {
@@ -436,184 +507,7 @@ class DiscoveryViewModel: ObservableObject {
             return string
         }
 
-        return nil
-    }
-}
-
-@MainActor
-final class ExploreResultsViewModel: ObservableObject {
-    @Published var results: [SearchViewModel.SearchResult] = []
-    @Published var isLoading = false
-    @Published var errorMessage: String?
-    @Published var hasMore = true
-
-    let selection: ExploreSelection
-    private var currentPage = 1
-    private var source: BookSource?
-
-    init(selection: ExploreSelection) {
-        self.selection = selection
-    }
-
-    func load() async {
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-
-        let context = CoreDataStack.shared.viewContext
-        let request: NSFetchRequest<BookSource> = BookSource.fetchRequest()
-        request.fetchLimit = 1
-        request.predicate = NSPredicate(format: "sourceId == %@", selection.sourceId as CVarArg)
-
-        do {
-            guard let source = try context.fetch(request).first else {
-                errorMessage = "书源不存在"
-                return
-            }
-            self.source = source
-
-            let items = try await loadPage(page: 1, source: source)
-            results = items
-            hasMore = !items.isEmpty
-        } catch {
-            recordFailure(error)
-            errorMessage = NetworkError.message(for: error)
-        }
-    }
-
-    func loadMoreIfNeeded() async {
-        guard !isLoading, hasMore, let source else { return }
-
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            let nextPage = currentPage + 1
-            let newItems = try await loadPage(page: nextPage, source: source)
-            let existingKeys = Set(results.map { "\($0.name.lowercased())|\($0.author.lowercased())|\($0.bookUrl)" })
-            let filtered = newItems.filter {
-                !existingKeys.contains("\($0.name.lowercased())|\($0.author.lowercased())|\($0.bookUrl)")
-            }
-
-            if filtered.isEmpty {
-                hasMore = false
-                return
-            }
-
-            currentPage = nextPage
-            results.append(contentsOf: filtered)
-        } catch {
-            recordFailure(error)
-            errorMessage = NetworkError.message(for: error)
-            hasMore = false
-        }
-    }
-
-    private func recordFailure(_ error: Error) {
-        let detail = error as NSError
-        let failingURL = (detail.userInfo[NSURLErrorFailingURLErrorKey] as? URL)?.absoluteString
-            ?? (detail.userInfo[NSURLErrorFailingURLStringErrorKey] as? String) ?? selection.url
-        var components = URLComponents(string: failingURL)
-        components?.user = nil; components?.password = nil
-        components?.query = nil; components?.fragment = nil
-        DebugLogger.shared.log("发现请求失败：书源=\(selection.sourceName)，ID=\(selection.sourceId)，分类=\(selection.kindTitle)，URL=\(components?.string ?? "未知")，\(detail.domain)(\(detail.code))，\(NetworkError.message(for: error))")
-    }
-
-    private func loadPage(page: Int, source: BookSource) async throws -> [SearchViewModel.SearchResult] {
-        let items = try await WebBook.exploreBook(source: source, url: selection.url, page: page)
-        return items.map {
-            SearchViewModel.SearchResult(
-                name: $0.name,
-                author: $0.author,
-                coverUrl: $0.coverUrl,
-                intro: $0.intro,
-                kind: $0.kind,
-                lastChapter: $0.lastChapter,
-                sourceName: source.bookSourceName,
-                sourceId: source.sourceId,
-                bookUrl: $0.bookUrl
-            )
-        }
-    }
-
-
-}
-
-struct ExploreResultsView: View {
-    let selection: ExploreSelection
-    @StateObject private var viewModel: ExploreResultsViewModel
-    @State private var selectedResult: BookSearchResult?
-    @State private var navigatingToBookDetail = false
-
-    init(selection: ExploreSelection) {
-        self.selection = selection
-        _viewModel = StateObject(wrappedValue: ExploreResultsViewModel(selection: selection))
-    }
-
-    var body: some View {
-        List {
-            ForEach(viewModel.results) { result in
-                Button(action: { selectResult(result) }) {
-                    SearchItemView(result: result)
-                }
-                .buttonStyle(.plain)
-            }
-
-            if viewModel.hasMore, !viewModel.results.isEmpty {
-                Button(action: {
-                    Task { await viewModel.loadMoreIfNeeded() }
-                }) {
-                    HStack {
-                        Spacer()
-                        if viewModel.isLoading {
-                            ProgressView()
-                        } else {
-                            Text("加载更多")
-                                .foregroundColor(.blue)
-                        }
-                        Spacer()
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .listStyle(.plain)
-        .navigationTitle(selection.kindTitle)
-        .navigationBarTitleDisplayMode(.inline)
-        .overlay {
-            if viewModel.isLoading {
-                ProgressView()
-            } else if viewModel.results.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "books.vertical")
-                        .font(.system(size: 42))
-                        .foregroundColor(.secondary.opacity(0.6))
-                    Text("暂无发现结果")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .task { await viewModel.load() }
-        .alert("错误", isPresented: Binding(
-            get: { viewModel.errorMessage != nil },
-            set: { if !$0 { viewModel.errorMessage = nil } }
-        )) {
-            Button("确定", role: .cancel) { viewModel.errorMessage = nil }
-        } message: {
-            Text(viewModel.errorMessage ?? "")
-        }
-        .navigationDestination(isPresented: $navigatingToBookDetail) {
-            if let result = selectedResult {
-                BookDetailView(result: result)
-                    .id(result.id)
-            }
-        }
-    }
-
-    private func selectResult(_ result: SearchViewModel.SearchResult) {
-        selectedResult = result
-        navigatingToBookDetail = true
+        return ""
     }
 }
 

@@ -8,6 +8,7 @@ struct SearchView: View {
     @State private var showHistory = true
     @State private var navigatingToBookDetail = false
     @State private var selectedResult: BookSearchResult?
+    @State private var sourceResult: BookSearchResult?
     @State private var historyKeywords: [SearchKeyword] = []
     @FocusState private var isSearchFocused: Bool
     
@@ -34,6 +35,12 @@ struct SearchView: View {
             .sheet(isPresented: $showingSourcePicker) {
                 SourcePickerView(selectedSources: $viewModel.selectedSources)
             }
+            .sheet(item: $sourceResult) { result in
+                SearchBookSourcesSheet(result: result, searchModel: viewModel) { selected in
+                    sourceResult = nil
+                    selectResult(selected)
+                }
+            }
             .navigationDestination(isPresented: $navigatingToBookDetail) {
                 if let result = selectedResult {
                     BookDetailView(result: result)
@@ -58,7 +65,7 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundColor(.secondary)
             
-            TextField(viewModel.searchMode == .author ? "输入作者名" : "输入书名或作者", text: $viewModel.searchText)
+            TextField(viewModel.searchMode == .author ? "输入作者名" : (viewModel.searchMode == .title ? "输入完整书名关键词" : "输入书名或作者"), text: $viewModel.searchText)
                 .accessibilityIdentifier("search.keyword")
                 .textFieldStyle(.plain)
                 .focused($isSearchFocused)
@@ -87,12 +94,17 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 8) {
             Picker("搜索方式", selection: $viewModel.searchMode) {
                 Text("综合").tag(SearchViewModel.SearchMode.all)
+                Text("精确书名").tag(SearchViewModel.SearchMode.title)
                 Text("按作者").tag(SearchViewModel.SearchMode.author)
             }
             .pickerStyle(.segmented)
             .accessibilityIdentifier("search.mode")
             if viewModel.searchMode == .author {
                 Text("只显示作者名包含关键词的书。部分书源仅支持搜书名，可能搜不到作者。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if viewModel.searchMode == .title {
+                Text("书名必须连续包含输入的全部文字，不拆词；允许书名前后有其他文字。")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -209,14 +221,26 @@ struct SearchView: View {
             return viewModel.searchMode == .author ? "输入作者名开始搜索" : "输入书名或作者开始搜索"
         }
         if viewModel.wasCancelled { return "搜索已停止" }
+        if viewModel.searchMode == .title { return "没有找到书名完整包含关键词的书" }
         return viewModel.searchMode == .author ? "没有找到作者匹配的书" : "没有找到相关书籍"
     }
     
     private var resultsListView: some View {
         List {
             ForEach(viewModel.searchResults) { result in
-                Button(action: { selectResult(result) }) { SearchItemView(result: result) }
+                Button(action: { selectResult(result) }) { SearchItemView(result: result, showsSourceCount: false) }
                     .buttonStyle(.plain)
+                    .overlay(alignment: .topTrailing) {
+                        Button { sourceResult = result } label: {
+                            Text("\(result.sourceCount) 个书源")
+                                .accessibilityIdentifier("search.sourceCount")
+                                .font(.caption2).foregroundColor(.white)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.accentColor).clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("search.sources." + result.name)
+                    }
             }
         }
         .listStyle(.plain)
@@ -236,7 +260,6 @@ struct SearchView: View {
     
     private func selectResult(_ result: SearchViewModel.SearchResult) {
         isSearchFocused = false
-        viewModel.cancelSearch()
         selectedResult = result
         navigatingToBookDetail = true
     }
@@ -278,8 +301,90 @@ struct SearchView: View {
     }
 }
 
+struct SearchBookSourcesSheet: View {
+    let result: BookSearchResult
+    @ObservedObject var searchModel: SearchViewModel
+    let onSelect: (BookSearchResult) -> Void
+    @StateObject private var viewModel = SearchViewModel(selectionDefaults: nil)
+    @Environment(\.dismiss) private var dismiss
+    @State private var requestedMore = false
+    @State private var checkingSource: BookSource?
+    @State private var checkingBookURL = ""
+
+    private var sources: [BookSearchSource] {
+        let additional = viewModel.searchResults.first {
+            $0.displayName.localizedCaseInsensitiveCompare(result.displayName) == .orderedSame &&
+            (result.displayAuthor.isEmpty || $0.displayAuthor.localizedCaseInsensitiveCompare(result.displayAuthor) == .orderedSame)
+        }?.availableSources ?? []
+        var seen = Set<UUID>()
+        let current = searchModel.searchResults.first { $0.id == result.id } ?? result
+        return (current.availableSources + additional).filter { seen.insert($0.sourceId).inserted }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("优先显示本次搜索范围内已找到的书源。需要扩大范围时，再搜索全部启用的书源。")
+                        .font(.footnote).foregroundColor(.secondary)
+                    if viewModel.isSearching {
+                        HStack {
+                            ProgressView()
+                            Text("正在搜索 \(viewModel.completedSourceCount)/\(viewModel.totalSourceCount) 个书源")
+                            Spacer()
+                            Button("停止") { viewModel.cancelSearch() }
+                        }
+                    } else {
+                        Button("重新搜索全部启用书源") {
+                            requestedMore = true
+                            Task { await viewModel.search(keyword: result.name, sources: viewModel.selectedSources) }
+                        }
+                        .accessibilityIdentifier("search.sources.searchMore")
+                        if requestedMore {
+                            Text(viewModel.wasCancelled ? "搜索已停止，已找到的书源仍可选择" : "搜索完成，共找到 \(sources.count) 个书源")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+                    }
+                }
+                Section("《\(result.name)》· \(sources.count) 个书源") {
+                    ForEach(sources) { source in
+                        Button { onSelect(result.using(source)) } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(source.sourceName).foregroundColor(.primary)
+                                if let chapter = source.lastChapter, !chapter.isEmpty {
+                                    Text(chapter).font(.caption).foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        .accessibilityIdentifier("search.source." + source.sourceName)
+                        .contextMenu {
+                            Button("校验这个书源") {
+                                checkingBookURL = source.bookUrl
+                                let request = BookSource.fetchRequest()
+                                request.fetchLimit = 1
+                                request.predicate = NSPredicate(format: "sourceId == %@", source.sourceId as CVarArg)
+                                checkingSource = try? CoreDataStack.shared.viewContext.fetch(request).first
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("选择书源")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .navigationBarLeading) { Button("关闭") { dismiss() } } }
+            .sheet(isPresented: Binding(get: { checkingSource != nil }, set: { if !$0 { checkingSource = nil } })) {
+                if let source = checkingSource {
+                    SourceDiagnosticView(source: source, bookName: result.name, failingBookURL: checkingBookURL)
+                }
+            }
+        }
+        .onDisappear { viewModel.cancelSearch() }
+    }
+}
+
 struct SearchItemView: View {
     let result: SearchViewModel.SearchResult
+    var showsSourceCount = true
     
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -305,6 +410,8 @@ struct SearchItemView: View {
                             .padding(.vertical, 2)
                             .background(Color.accentColor)
                             .clipShape(Capsule())
+                            .opacity(showsSourceCount ? 1 : 0)
+                            .accessibilityHidden(!showsSourceCount)
                     }
                 }
                 
