@@ -554,14 +554,14 @@ enum ExploreRuleParser {
             throw ParseError.invalidJavaScript
         }
 
-        if let array = value.toArray(),
+        if value.isArray, let array = value.toArray(),
            JSONSerialization.isValidJSONObject(array),
            let data = try? JSONSerialization.data(withJSONObject: array),
            let string = String(data: data, encoding: .utf8) {
             return string
         }
 
-        if let dict = value.toDictionary(),
+        if value.isObject, !value.isArray, let dict = value.toDictionary(),
            JSONSerialization.isValidJSONObject(dict),
            let data = try? JSONSerialization.data(withJSONObject: dict),
            let string = String(data: data, encoding: .utf8) {
