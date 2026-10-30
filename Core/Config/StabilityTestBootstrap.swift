@@ -21,6 +21,8 @@ enum StabilityTestBootstrap {
         // 每次 UI 测试启动都会创建新数据库，旧书源编号不属于本次测试数据。
         UserDefaults.standard.removeObject(forKey: "search.selectedSourceIDs")
         UserDefaults.standard.removeObject(forKey: "search.mode")
+        UserDefaults.standard.removeObject(forKey: "discovery.selectedSourceID")
+        UserDefaults.standard.removeObject(forKey: "discovery.selectedCategories")
         let rules: [String: Any] = [
             "ruleSearch": ["bookList": "$.books", "name": "$.titles[{$.idx}]", "author": "$.author", "bookUrl": "$.url"],
             "ruleBookInfo": ["name": "$.name", "author": "$.author", "tocUrl": "$.toc",
@@ -51,10 +53,18 @@ enum StabilityTestBootstrap {
             }
             if kind != "missing" {
                 source["enabledExplore"] = true
-                source["exploreUrl"] = "测试分类::" + base + "/explore"
+                source["exploreUrl"] = "测试分类::" + base + "/explore-posters?source=\(kind)&kind=hot&page={{page}}"
                 if kind == "current", let key = ProcessInfo.processInfo.environment["LEGADO_DISCOVERY_SLOW"] {
                     source["exploreUrl"] = "@js: java.ajax('\(base)/explore-kinds?key=\(key)')"
                 }
+            }
+            if ProcessInfo.processInfo.environment["LEGADO_DISCOVERY_WALL"] == "1" {
+                source["enabledExplore"] = true
+                source["bookSourceName"] = kind == "current" ? "星河书屋" : (kind == "alternate" ? "远山书屋" : "暂不可用书源")
+                source["bookSourceGroup"] = kind == "missing" ? "待校验" : "小说"
+                source["exploreUrl"] = kind == "current"
+                    ? "热门推荐::\(base)/explore-posters?source=current&kind=hot&page={{page}}&&完本榜::\(base)/explore-posters?source=current&kind=finished&page={{page}}"
+                    : (kind == "alternate" ? "都市精选::\(base)/explore-posters?source=alternate&kind=urban&page={{page}}" : "推荐::\(base)/failure")
             }
             return source
         }

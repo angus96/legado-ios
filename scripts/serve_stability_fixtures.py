@@ -18,7 +18,24 @@ class StabilityHandler(Handler):
     def do_GET(self):
         parsed = urlsplit(self.path)
         key = parse_qs(parsed.query).get("key", [""])[0]
-        if parsed.path == "/search-title":
+        if parsed.path == "/explore-posters":
+            query = parse_qs(parsed.query)
+            category = query.get("kind", ["hot"])[0]
+            source = query.get("source", ["current"])[0]
+            page = int(query.get("page", ["1"])[0])
+            titles = [("长夜行舟", "远山与海"), ("山海有归期", "林舟"), ("春日来信", "南枝"),
+                      ("万里星河", "向北"), ("云上长安", "青岚"), ("人间风物", "白露")]
+            if category == "finished":
+                titles = [("山河旧梦", "江川"), ("归来时有风", "南枝"), ("旧巷拾光", "苏木")]
+            elif source == "alternate":
+                titles = [("灯火人间", "林舟"), ("一城烟雨", "苏木"), ("午后信笺", "白露")]
+            books = [{"idx": 0, "titles": [title], "author": author,
+                      "url": f"/book?source={source}&kind={category}&index={index}"}
+                     for index, (title, author) in enumerate(titles)] if page == 1 else []
+            body = json.dumps({"books": books}, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+        elif parsed.path == "/search-title":
             books = [{"idx": 0, "titles": [title], "author": "测试作者", "url": f"/title/{index}"}
                      for index, title in enumerate(["我在大明当先生", "全集：我在大明当先生", "大明：我在朝堂"])]
             body = json.dumps({"books": books}, ensure_ascii=False).encode()
@@ -40,7 +57,7 @@ class StabilityHandler(Handler):
             with self.explore_lock:
                 self.explore_requests[key] = self.explore_requests.get(key, 0) + 1
             time.sleep(3)
-            body = json.dumps([{"title": "动态测试分类", "url": "/explore"}], ensure_ascii=False).encode()
+            body = json.dumps([{"title": "动态测试分类", "url": "/explore-posters?source=current&kind=hot&page={{page}}"}], ensure_ascii=False).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
         elif parsed.path == "/explore-request-count":

@@ -64,9 +64,9 @@ final class ReadingAndSearchTests: XCTestCase {
         let scriptedID = scripted.sourceId
 
         let gate = SearchResponseGate()
-        let started = expectation(description: "只解析展开的书源一次")
+        let started = expectation(description: "只解析选中的书源一次")
         started.assertForOverFulfill = true
-        let model = DiscoveryViewModel(context: database.newBackgroundContext()) { source in
+        let model = DiscoveryViewModel(context: database.newBackgroundContext(), defaults: nil) { source in
             XCTAssertEqual(source.sourceId, scriptedID)
             started.fulfill()
             await gate.wait()
@@ -74,7 +74,8 @@ final class ReadingAndSearchTests: XCTestCase {
         }
         await model.loadExploreGroups()
         XCTAssertEqual(model.exploreGroups.count, 2)
-        XCTAssertTrue(model.exploreGroups.allSatisfy { !$0.isLoading && !$0.isExpanded })
+        XCTAssertTrue(model.exploreGroups.allSatisfy { !$0.isLoading })
+        XCTAssertNil(model.selectedSourceID)
         XCTAssertEqual(try XCTUnwrap(model.exploreGroups.first { $0.sourceId == scripted.sourceId }).exploreKinds.count, 0)
         model.filterGroups(keyword: "历史")
         XCTAssertEqual(model.filteredGroups.map(\.sourceId), [plain.sourceId])
@@ -83,17 +84,17 @@ final class ReadingAndSearchTests: XCTestCase {
         let loaded = expectation(description: "动态分类加载完成")
         let subscription = model.$exploreGroups.first { $0.contains { $0.exploreKinds.first?.title == "动态分类" } }
             .sink { _ in loaded.fulfill() }
-        model.toggleGroup(scripted.sourceId)
+        model.selectSource(scripted.sourceId)
         await fulfillment(of: [started], timeout: 3)
         XCTAssertTrue(try XCTUnwrap(model.filteredGroups.first).isLoading)
-        model.toggleGroup(scripted.sourceId)
-        model.toggleGroup(scripted.sourceId)
+        model.selectSource(scripted.sourceId)
+        model.selectSource(scripted.sourceId)
         await gate.release()
         await fulfillment(of: [loaded], timeout: 3)
         XCTAssertEqual(model.filteredGroups.map(\.sourceId), [scripted.sourceId])
         XCTAssertFalse(try XCTUnwrap(model.filteredGroups.first).isLoading)
-        model.toggleGroup(scripted.sourceId)
-        model.toggleGroup(scripted.sourceId)
+        model.selectSource(scripted.sourceId)
+        model.selectSource(scripted.sourceId)
         XCTAssertEqual(model.filteredGroups.first?.exploreKinds.first?.url, "/dynamic")
         withExtendedLifetime(subscription) {}
     }
@@ -107,7 +108,7 @@ final class ReadingAndSearchTests: XCTestCase {
         source.exploreUrl = "@js: missingFunction()"
         try database.viewContext.save()
         var attempts = 0
-        let model = DiscoveryViewModel(context: database.newBackgroundContext()) { _ in
+        let model = DiscoveryViewModel(context: database.newBackgroundContext(), defaults: nil) { _ in
             attempts += 1
             if attempts == 1 { throw ExploreRuleParser.ParseError.invalidJavaScript }
             return [ExploreKind(title: "重试成功", url: "/retry")]
@@ -116,7 +117,7 @@ final class ReadingAndSearchTests: XCTestCase {
         let failed = expectation(description: "显示分类加载失败")
         let failureSubscription = model.$exploreGroups.first { $0.first?.errorMessage != nil }
             .sink { _ in failed.fulfill() }
-        model.toggleGroup(source.sourceId)
+        model.selectSource(source.sourceId)
         await fulfillment(of: [failed], timeout: 3)
         XCTAssertFalse(try XCTUnwrap(model.exploreGroups.first).isLoading)
         let loaded = expectation(description: "重试后显示分类")
@@ -140,14 +141,14 @@ final class ReadingAndSearchTests: XCTestCase {
         let gate = SearchResponseGate()
         let started = expectation(description: "旧分类正在加载")
         let finished = expectation(description: "旧请求已返回")
-        let model = DiscoveryViewModel(context: database.newBackgroundContext()) { _ in
+        let model = DiscoveryViewModel(context: database.newBackgroundContext(), defaults: nil) { _ in
             started.fulfill()
             await gate.wait()
             finished.fulfill()
             return [ExploreKind(title: "旧分类", url: "/old")]
         }
         await model.loadExploreGroups()
-        model.toggleGroup(source.sourceId)
+        model.selectSource(source.sourceId)
         await fulfillment(of: [started], timeout: 3)
         source.exploreUrl = "新分类::/new"
         try database.viewContext.save()
