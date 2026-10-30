@@ -14,15 +14,19 @@ struct BookDetailView: View {
     @State private var showingLogSheet = false
     @State private var showingGroupSelection = false
     @State private var confirmingRemoval = false
+    @State private var showingSourceCheck = false
+    private let searchSources: [BookSearchSource]?
     @Environment(\.dismiss) var dismiss
     
     private var book: Book { viewModel.book }
 
     init(book: Book) {
+        searchSources = nil
         _viewModel = StateObject(wrappedValue: BookDetailViewModel(book: book))
     }
 
     init(result: BookSearchResult) {
+        searchSources = result.availableSources
         _viewModel = StateObject(wrappedValue: BookDetailViewModel(result: result))
     }
     
@@ -73,6 +77,9 @@ struct BookDetailView: View {
                         Label("刷新书籍信息", systemImage: "arrow.clockwise")
                     }
                     .disabled(viewModel.isLoading || book.isLocal)
+                    if !book.isLocal, viewModel.currentSource != nil {
+                        Button("校验这个书源") { showingSourceCheck = true }
+                    }
                     if viewModel.isInBookshelf {
                         Button(action: { showingChapterCache = true }) {
                             Label("缓存章节", systemImage: "arrow.down.circle")
@@ -133,9 +140,16 @@ struct BookDetailView: View {
             ChapterCacheView(book: book)
         }
         .sheet(isPresented: $showingSourceSelection) {
-            ChangeSourceSheet(isPresented: $showingSourceSelection, book: book) {
+            ChangeSourceSheet(isPresented: $showingSourceSelection, book: book, initialSources: searchSources) {
                 viewModel.currentSource = try? BookSourceResolver.resolve(for: book)
                 Task { await viewModel.loadChapters() }
+            }
+        }
+        .sheet(isPresented: $showingSourceCheck, onDismiss: {
+            viewModel.currentSource = try? BookSourceResolver.resolve(for: book)
+        }) {
+            if let source = viewModel.currentSource {
+                SourceDiagnosticView(source: source, bookName: book.name, failingBookURL: book.bookUrl)
             }
         }
         .sheet(isPresented: $showingEditSheet) {
@@ -170,6 +184,12 @@ struct BookDetailView: View {
             get: { viewModel.errorMessage != nil },
             set: { if !$0 { viewModel.errorMessage = nil } }
         )) {
+            if !book.isLocal, viewModel.currentSource != nil {
+                Button("校验这个书源") {
+                    viewModel.errorMessage = nil
+                    showingSourceCheck = true
+                }
+            }
             Button("确定") { viewModel.errorMessage = nil }
         } message: { Text(viewModel.errorMessage ?? "") }
     }
@@ -237,6 +257,7 @@ struct BookDetailView: View {
                 Spacer(minLength: 0)
                 if viewModel.isInBookshelf && !book.isLocal {
                     Button("换源") { showingSourceSelection = true }.font(.subheadline)
+                        .accessibilityIdentifier("bookDetail.changeSource")
                 }
             }
             if let latest = nonEmpty(book.latestChapterTitle) {

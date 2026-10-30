@@ -2,6 +2,53 @@ import XCTest
 
 final class LegadoUITests: XCTestCase {
     @MainActor
+    func testExactTitleAndMatchedSourcesAreAvailableWithoutResearching() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["LEGADO_UI_TESTS"] = "1"
+        app.launchEnvironment["LEGADO_TITLE_SEARCH"] = "1"
+        app.launchEnvironment["LEGADO_FIXTURE_URL"] = "http://127.0.0.1:8766"
+        app.launchArguments = ["-com.apple.CoreData.ConcurrencyDebug", "1"]
+        app.launch()
+        XCTAssertTrue(app.buttons["bookshelf.search"].waitForExistence(timeout: 15))
+        app.buttons["bookshelf.search"].tap()
+        app.segmentedControls["search.mode"].buttons["精确书名"].tap()
+        let keyword = app.textFields["search.keyword"]
+        keyword.tap(); keyword.typeText("我在大明\n")
+        XCTAssertTrue(app.staticTexts["我在大明当先生"].firstMatch.waitForExistence(timeout: 15))
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "搜索完成"), object: app.staticTexts["search.progress"])], timeout: 15)
+        XCTAssertFalse(app.staticTexts["大明：我在朝堂"].exists)
+        app.buttons["search.sources.我在大明当先生"].tap()
+        XCTAssertTrue(app.buttons["search.source.测试原书源"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["search.source.测试新书源"].exists)
+        XCTAssertTrue(app.buttons["search.sources.searchMore"].exists)
+        XCTAssertFalse(app.buttons["停止"].exists, "打开已找到的书源列表不能自动开始全量搜索")
+        capture(app, name: "精确书名-优先显示本次搜索的书源")
+    }
+
+    @MainActor
+    func testSearchKeepsLateResultsAfterAnEarlyBookFailsToOpen() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["LEGADO_UI_TESTS"] = "1"
+        app.launchEnvironment["LEGADO_SEARCH_CONTINUES"] = "1"
+        app.launchEnvironment["LEGADO_FIXTURE_URL"] = "http://127.0.0.1:8766"
+        app.launch()
+        XCTAssertTrue(app.buttons["bookshelf.search"].waitForExistence(timeout: 15))
+        app.buttons["bookshelf.search"].tap()
+        let keyword = app.textFields["search.keyword"]
+        keyword.tap(); keyword.typeText("测试\n")
+        let early = app.staticTexts["详情失败的书"].firstMatch
+        XCTAssertTrue(early.waitForExistence(timeout: 10))
+        early.tap()
+        XCTAssertTrue(app.navigationBars["书籍详情"].waitForExistence(timeout: 10))
+        app.navigationBars["书籍详情"].buttons["搜索"].tap()
+        XCTAssertTrue(app.staticTexts["后来返回的书"].firstMatch.waitForExistence(timeout: 15))
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "搜索完成"), object: app.staticTexts["search.progress"])], timeout: 15)
+        capture(app, name: "搜索-失败后仍收到后续书源结果")
+    }
+
+    @MainActor
     func testIncomingTextIsAutomaticallySavedAndCanBeReadFromTheShelf() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

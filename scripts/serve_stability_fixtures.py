@@ -18,7 +18,25 @@ class StabilityHandler(Handler):
     def do_GET(self):
         parsed = urlsplit(self.path)
         key = parse_qs(parsed.query).get("key", [""])[0]
-        if parsed.path == "/explore-kinds":
+        if parsed.path == "/search-title":
+            books = [{"idx": 0, "titles": [title], "author": "测试作者", "url": f"/title/{index}"}
+                     for index, title in enumerate(["我在大明当先生", "全集：我在大明当先生", "大明：我在朝堂"])]
+            body = json.dumps({"books": books}, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+        elif parsed.path in ("/search-early", "/search-late"):
+            late = parsed.path == "/search-late"
+            if late:
+                time.sleep(5)
+            body = json.dumps({"books": [{"idx": 0, "titles": ["后来返回的书" if late else "详情失败的书"],
+                                         "author": "测试作者", "url": "/book" if late else "/broken-book"}]}, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+        elif parsed.path == "/broken-book":
+            body = b"book unavailable"
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain")
+        elif parsed.path == "/explore-kinds":
             with self.explore_lock:
                 self.explore_requests[key] = self.explore_requests.get(key, 0) + 1
             time.sleep(3)

@@ -9,6 +9,7 @@ class SearchViewModel: ObservableObject {
 
     enum SearchMode: String {
         case all
+        case title
         case author
     }
 
@@ -195,6 +196,10 @@ class SearchViewModel: ObservableObject {
         switch searchMode {
         case .all:
             searchResults = unfilteredResults
+        case .title:
+            searchResults = unfilteredResults.filter {
+                $0.displayName.localizedCaseInsensitiveContains(resultKeyword)
+            }
         case .author:
             searchResults = unfilteredResults.filter {
                 !$0.displayAuthor.isEmpty && $0.displayAuthor.localizedCaseInsensitiveContains(resultKeyword)

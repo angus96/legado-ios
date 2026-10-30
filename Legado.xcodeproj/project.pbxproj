@@ -223,6 +223,7 @@
 		BA24DFD139C3F83947857749 /* ContentRuleSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB36947F3F48065A6D484706 /* ContentRuleSection.swift */; };
 		BAA32960B64BA8BB80AA2A5F /* SlidePageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 022115FC89A653D4C83862ED /* SlidePageView.swift */; };
 		BB74C8BFE85150B6AD71742F /* AutoPageTurnManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 953FE9EB409C77ADBEF32D44 /* AutoPageTurnManager.swift */; };
+		BB84541919CA481DA40598D6 /* SourceDiagnosticView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58F8565BAFFA59C1286C8016 /* SourceDiagnosticView.swift */; };
 		BC919C6BEC067303B088693B /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1809FC3E0F5CF5FC9E5A333 /* WelcomeView.swift */; };
 		BDE5725448979CBFBBD8CFE8 /* FullTextFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B7657201989B6716DB955C8 /* FullTextFetcher.swift */; };
 		BDED88ABF00BD1C69F3C15B1 /* LocalBookViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46BD8BE87FFBEBCE42A227B5 /* LocalBookViewModel.swift */; };
@@ -431,6 +432,7 @@
 		56A884A6C05D4BA30A3ADC1F /* WebDAVSyncManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WebDAVSyncManager.swift; path = Core/Sync/WebDAVSyncManager.swift; sourceTree = "<group>"; };
 		56D77860791A7101521C019B /* HTTPClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = HTTPClient.swift; path = Core/Network/HTTPClient.swift; sourceTree = "<group>"; };
 		57BA060FD0DC37076ED03B6E /* DictRule+CoreDataClass.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = "DictRule+CoreDataClass.swift"; path = "Core/Persistence/DictRule+CoreDataClass.swift"; sourceTree = "<group>"; };
+		58F8565BAFFA59C1286C8016 /* SourceDiagnosticView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SourceDiagnosticView.swift; path = Features/Source/SourceDiagnosticView.swift; sourceTree = "<group>"; };
 		59A52278CD5736314AFEC89F /* LocalTextBookImporter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LocalTextBookImporter.swift; path = Core/Import/LocalTextBookImporter.swift; sourceTree = "<group>"; };
 		59BE5447D9856435D7003C2C /* LegadoApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LegadoApp.swift; path = App/LegadoApp.swift; sourceTree = "<group>"; };
 		5AC3123AE9E0969A1396C9A0 /* FastScrollBar.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FastScrollBar.swift; path = Core/UI/FastScrollBar.swift; sourceTree = "<group>"; };
@@ -910,6 +912,7 @@
 				8F2963B8DA6F68E6AFD4F938 /* NetworkPolicyTests.swift */,
 				59A52278CD5736314AFEC89F /* LocalTextBookImporter.swift */,
 				97CB955BA6304D793BDD91C0 /* LocalTextBookImportTests.swift */,
+				58F8565BAFFA59C1286C8016 /* SourceDiagnosticView.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -1633,6 +1636,7 @@
 				5D9695AFA8C2DF865E8B4A66 /* ChapterCacheView.swift in Sources */,
 				AFB714019EA994A07B80DE24 /* ChapterCacheViewModel.swift in Sources */,
 				AAE6A080D13627871DAEC1CF /* LocalTextBookImporter.swift in Sources */,
+				BB84541919CA481DA40598D6 /* SourceDiagnosticView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

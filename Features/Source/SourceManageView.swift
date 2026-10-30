@@ -20,6 +20,7 @@ struct SourceManageView: View {
     @State private var importResultMessage = ""
     @State private var showingGroupManage = false
     @State private var editViewModel: SourceEditViewModel?
+    @State private var checkingSource: BookSource?
     
     // 批量操作状态
     @State private var isEditMode = false
@@ -46,6 +47,9 @@ struct SourceManageView: View {
                             isEditMode: isEditMode
                         )
                         .contentShape(Rectangle())
+                        .contextMenu {
+                            Button("校验这个书源") { checkingSource = source }
+                        }
                         .onTapGesture {
                             if isEditMode {
                                 toggleSelection(source.sourceId)
@@ -75,6 +79,12 @@ struct SourceManageView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .sheet(isPresented: Binding(get: { checkingSource != nil }, set: { if !$0 { checkingSource = nil } }),
+                   onDismiss: { Task { await viewModel.loadSources() } }) {
+                if let source = checkingSource {
+                    SourceDiagnosticView(source: source, bookName: "", failingBookURL: "")
+                }
+            }
             .navigationTitle("书源管理")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

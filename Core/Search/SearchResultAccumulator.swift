@@ -1,5 +1,20 @@
 import Foundation
 
+struct BookSearchSource: Identifiable {
+    var id: UUID { sourceId }
+    let sourceId: UUID
+    let sourceName: String
+    let bookUrl: String
+    let lastChapter: String?
+
+    init(_ result: BookSearchResult) {
+        sourceId = result.sourceId
+        sourceName = result.displaySourceName
+        bookUrl = result.bookUrl
+        lastChapter = result.lastChapter
+    }
+}
+
 struct BookSearchResult: Identifiable {
     let id = UUID()
     let name: String
@@ -13,6 +28,20 @@ struct BookSearchResult: Identifiable {
     var sourceId: UUID
     var bookUrl: String
     var sourceCount: Int = 1
+    var matchedSources: [BookSearchSource] = []
+
+    var availableSources: [BookSearchSource] {
+        matchedSources.isEmpty ? [BookSearchSource(self)] : matchedSources
+    }
+
+    func using(_ source: BookSearchSource) -> BookSearchResult {
+        var result = self
+        result.sourceId = source.sourceId
+        result.sourceName = source.sourceName
+        result.bookUrl = source.bookUrl
+        result.lastChapter = source.lastChapter
+        return result
+    }
 
     var displayName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     var displayAuthor: String { author.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -40,6 +69,11 @@ struct SearchResultAccumulator {
             }
             if let index = indices[key] {
                 results[index].sourceCount = sources[key]?.count ?? 1
+                if let sourceIndex = results[index].matchedSources.firstIndex(where: { $0.sourceId == item.sourceId }) {
+                    results[index].matchedSources[sourceIndex] = BookSearchSource(item)
+                } else {
+                    results[index].matchedSources.append(BookSearchSource(item))
+                }
                 if results[index].coverUrl?.isEmpty != false { results[index].coverUrl = item.coverUrl }
                 if results[index].intro?.isEmpty != false { results[index].intro = item.intro }
                 if results[index].kind?.isEmpty != false { results[index].kind = item.kind }
@@ -47,7 +81,9 @@ struct SearchResultAccumulator {
                 if results[index].lastChapter?.isEmpty != false { results[index].lastChapter = item.lastChapter }
             } else {
                 indices[key] = results.count
-                results.append(item)
+                var result = item
+                result.matchedSources = [BookSearchSource(item)]
+                results.append(result)
             }
         }
     }
@@ -78,6 +114,7 @@ struct SearchResultAccumulator {
                 result.lastChapter = replacement.lastChapter
             }
             result.sourceCount = ids.count
+            result.matchedSources.removeAll { !ids.contains($0.sourceId) }
             sources[key] = ids
             if candidates[key]?.count != ids.count {
                 candidates[key] = candidates[key]?.filter { ids.contains($0.key) }

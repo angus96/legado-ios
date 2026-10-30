@@ -15,6 +15,7 @@ struct ReaderView: View {
     @State private var showingAutoPageTurn = false
     @State private var showingBookmarks = false
     @State private var showingChangeSource = false
+    @State private var showingSourceCheck = false
     @State private var showingEffectiveReplaces = false
     @State private var showingSearchInBook = false
     @State private var showingClickAction = false
@@ -107,6 +108,10 @@ struct ReaderView: View {
                             .padding()
                             .background(Color.red.opacity(0.8))
                             .cornerRadius(8)
+                        if let source = book?.source, !source.isDeleted {
+                            Button("校验这个书源") { showingSourceCheck = true }
+                                .buttonStyle(.borderedProminent)
+                        }
                     }
                     .padding()
                 }
@@ -167,6 +172,11 @@ struct ReaderView: View {
                         .presentationDragIndicator(.visible)
                 } else {
                     ReadStyleDialog(viewModel: viewModel, isPresented: $showingStyleConfig)
+                }
+            }
+            .sheet(isPresented: $showingSourceCheck) {
+                if let book, let source = book.source, !source.isDeleted {
+                    SourceDiagnosticView(source: source, bookName: book.name, failingBookURL: book.bookUrl)
                 }
             }
             .sheet(isPresented: $showingChangeSource) {

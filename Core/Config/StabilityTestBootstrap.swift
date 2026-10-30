@@ -43,6 +43,12 @@ enum StabilityTestBootstrap {
             if ProcessInfo.processInfo.environment["LEGADO_AUTHOR_SEARCH"] == "1" {
                 source["searchUrl"] = base + "/search-author?key={{key}}"
             }
+            if ProcessInfo.processInfo.environment["LEGADO_TITLE_SEARCH"] == "1" {
+                source["searchUrl"] = base + "/search-title"
+            }
+            if ProcessInfo.processInfo.environment["LEGADO_SEARCH_CONTINUES"] == "1" {
+                source["searchUrl"] = base + (kind == "current" ? "/search-early" : "/search-late")
+            }
             if kind != "missing" {
                 source["enabledExplore"] = true
                 source["exploreUrl"] = "测试分类::" + base + "/explore"
