@@ -64,15 +64,16 @@ struct SearchResultAccumulator {
             guard !item.displayName.isEmpty, !item.bookUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
             let key = item.displayName.lowercased() + "\u{0}" + item.displayAuthor.lowercased()
             candidates[key, default: [:]][item.sourceId] = item
-            if sources[key, default: []].insert(item.sourceId).inserted {
+            let isNewSource = sources[key, default: []].insert(item.sourceId).inserted
+            if isNewSource {
                 sourceOrder[key, default: []].append(item.sourceId)
             }
             if let index = indices[key] {
                 results[index].sourceCount = sources[key]?.count ?? 1
-                if let sourceIndex = results[index].matchedSources.firstIndex(where: { $0.sourceId == item.sourceId }) {
-                    results[index].matchedSources[sourceIndex] = BookSearchSource(item)
-                } else {
+                if isNewSource {
                     results[index].matchedSources.append(BookSearchSource(item))
+                } else if let sourceIndex = results[index].matchedSources.firstIndex(where: { $0.sourceId == item.sourceId }) {
+                    results[index].matchedSources[sourceIndex] = BookSearchSource(item)
                 }
                 if results[index].coverUrl?.isEmpty != false { results[index].coverUrl = item.coverUrl }
                 if results[index].intro?.isEmpty != false { results[index].intro = item.intro }
